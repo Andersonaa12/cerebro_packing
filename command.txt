@@ -1,0 +1,2 @@
+pyinstaller --onefile --windowed --debug=all --icon=assets/img/favicon.ico --add-data "assets;assets" main.py
+C:\dropi\htdocs\cerebro_packing\dist\main.exe 2>&1 | Tee-Object error_log.txt

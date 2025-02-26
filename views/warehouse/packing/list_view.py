@@ -1,8 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox
 from tkinter import ttk
-import usb.core
-import usb.util
+import subprocess  # Se usará para ejecutar el comando WMIC
 
 from assets.css.styles import PRIMARY_COLOR, BACKGROUND_COLOR_VIEWS, LABEL_STYLE, BUTTON_STYLE
 from config.settings import API_BASE_URL
@@ -60,7 +59,7 @@ class PackingListView(tk.Frame):
         my_header = Header(
             master=header_frame,
             controller=self.login_controller,
-            on_logout_callback=self.on_logout
+            on_logout_callback=self.handle_logout  # Se asigna el callback de logout
         )
         my_header.pack(side="right")
 
@@ -134,19 +133,27 @@ class PackingListView(tk.Frame):
 
     def check_printer_status(self):
         """
-        Verifica si la impresora Zebra ZD220 está conectada vía USB.
-        Se utiliza pyusb para buscar el dispositivo a partir de su Vendor ID y Product ID.
+        Verifica si la impresora Zebra ZD220 está conectada vía USB usando el comando WMIC.
+        Se buscan dispositivos cuyo PNPDeviceID contenga los IDs típicos de Zebra:
+        Vendor: 0A5F y Product: 0044.
         
-        Nota:
-        - Ajusta VENDOR_ID y PRODUCT_ID según la documentación de tu impresora.
-        - Es posible que necesites permisos adecuados para acceder a los dispositivos USB.
+        Esta solución funciona en Windows sin necesidad de librerías externas.
         """
-        # Ejemplo de IDs para Zebra ZD220 (ajusta según corresponda)
-        VENDOR_ID = 0x0a5f      # Vendor ID típico de Zebra (verifica en tu caso)
-        PRODUCT_ID = 0x0044     # Product ID de la ZD220 (verifica en tu caso)
-
-        device = usb.core.find(idVendor=VENDOR_ID, idProduct=PRODUCT_ID)
-        return device is not None
+        VENDOR_ID = "0A5F"
+        PRODUCT_ID = "0044"
+        try:
+            # Ejecuta el comando WMIC para buscar dispositivos con los IDs indicados
+            cmd = (
+                'wmic path Win32_PnPEntity where "PNPDeviceID like \'%VID_{0}&PID_{1}%\'" get Name'
+                .format(VENDOR_ID, PRODUCT_ID)
+            )
+            output = subprocess.check_output(cmd, shell=True, universal_newlines=True)
+            # Se filtra la salida (se ignora la cabecera y líneas vacías)
+            lines = [line.strip() for line in output.splitlines() if line.strip() and "Name" not in line]
+            return len(lines) > 0
+        except Exception as e:
+            print("Error al verificar la impresora:", e)
+            return False
 
     def create_table(self, parent):
         columns = ("#", "Nombre", "Fecha Inicio", "Fecha Fin", "Estado", "Usuario", "Acciones")
@@ -248,7 +255,6 @@ class PackingListView(tk.Frame):
             widget.destroy()
 
         print("Solicitando procesos de picking en espera...")
-        # Usamos la misma API para obtener ambos tipos de datos
         waiting_response = self.login_controller.api_client._make_get_request(API_ROUTES["PACKING_LIST"])
         print("Respuesta de picking en espera:", waiting_response)
 
@@ -422,3 +428,14 @@ class PackingListView(tk.Frame):
         from views.warehouse.packing.list_view import PackingListView
         list_view = PackingListView(master=self.master, login_controller=self.login_controller)
         list_view.pack(expand=True, fill="both")
+    
+    def handle_logout(self):
+        """
+        Función que se ejecuta al cerrar sesión.
+        Destruye la ventana actual y llama al callback de logout para mostrar el login.
+        """
+        # Destruir todos los widgets de la ventana principal
+        for widget in self.master.winfo_children():
+            widget.destroy()
+        if self.on_logout:
+            self.on_logout()

@@ -1,5 +1,5 @@
-# views/auth/login_view.py
-
+import os
+import sys 
 import tkinter as tk
 from tkinter import messagebox
 from PIL import Image, ImageTk
@@ -10,7 +10,14 @@ from assets.css.styles import (
     PRIMARY_COLOR, LABEL_STYLE, BUTTON_STYLE, CHECKBOX_STYLE,
     INPUT_WIDTH, INPUT_BG_COLOR, INPUT_FG_COLOR, LOGO_SIZE
 )
+def obtener_ruta_relativa(ruta_archivo):
+    """ Retorna la ruta correcta para PyInstaller """
+    if getattr(sys, 'frozen', False):  # Si está empaquetado como .exe
+        base_path = sys._MEIPASS  # Carpeta temporal donde PyInstaller extrae los archivos
+    else:
+        base_path = os.path.abspath(".")  # Si se ejecuta como script normal
 
+    return os.path.join(base_path, ruta_archivo)
 class LoginView(tk.Frame):
     def __init__(self, master=None):
         super().__init__(master, bg=PRIMARY_COLOR)
@@ -27,7 +34,7 @@ class LoginView(tk.Frame):
         self.container = tk.Frame(self, bg=PRIMARY_COLOR)
         self.container.place(relx=0.5, rely=0.5, anchor="center")
         
-        self.logo_image = self._load_image("assets/img/favicon.png")
+        self.logo_image = self._load_image(obtener_ruta_relativa("assets/img/favicon.png"))
         self.create_widgets()
 
         # Si el autologin tuvo éxito en el constructor,
@@ -35,6 +42,15 @@ class LoginView(tk.Frame):
         if self.controller.get_logged_user() is not None:
             # Diferimos para que Tkinter termine de cargar la vista de login
             self.after(0, lambda: self._login_success_callback(self.controller.get_logged_user()))
+            
+    def _load_image(self, path):
+            try:
+                img = Image.open(path)
+                img = img.resize(LOGO_SIZE, Image.LANCZOS)
+                return ImageTk.PhotoImage(img)
+            except Exception as e:
+                print(f"Error cargando la imagen {path}: {e}")
+                return None
 
     def create_widgets(self):
         self.logo_label = tk.Label(self.container, image=self.logo_image, bg=PRIMARY_COLOR)
@@ -98,8 +114,12 @@ class LoginView(tk.Frame):
         
         # Función local para recrear LoginView tras logout, si es necesario
         def create_login():
-            from views.auth.login_view import LoginView
-            LoginView(master=self.master)
+            # Limpia el contenedor principal en vez de destruir todos los widgets de self.master
+            for widget in self.master.winfo_children():
+                widget.destroy()
+            login_view = LoginView(master=self.master)
+            login_view.pack(expand=True, fill="both")
+
         
         from views.warehouse.packing.list_view import PackingListView
         PackingListView(
