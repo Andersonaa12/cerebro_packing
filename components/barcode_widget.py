@@ -25,7 +25,7 @@ def create_barcode_widget(master, barcode_value, width=200, height=100):
     # Abrir la imagen con PIL
     image = Image.open(buffer)
     # Redimensionar la imagen según los parámetros dados
-    image = image.resize((width, height), Image.ANTIALIAS)
+    image = image.resize((width, height), Image.LANCZOS)
     # Convertir la imagen para que Tkinter la pueda usar
     photo = ImageTk.PhotoImage(image)
     # Crear un Label que contenga la imagen

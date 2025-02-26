@@ -3,11 +3,7 @@ API_ROUTES = {
     "LOGOUT":          "/logout",
     "VALIDATE_PROD":   "/product/validate/{barcode}",
     "VALIDATE_LOC":    "/location/validate/{barcode}",
-    "ASSIGN_LOC":      "/assign/location",
-    "MOVE_STOCK":      "/move/product/location/stock",
-    "GET_LOC_PROD":    "/get_location_products",
-    "DISCREPANCY":     "/get_discrepancy_stock_products",
-    
+    "GET_ORDER":      "/getOrder/{id}",
     "PACKING_LIST":    "/packing/process",
     "PACKING_VIEW":    "/packing/process/view/{id}",
     "PACKING_CREATE":  "/packing/process/create/{id}",
