@@ -1,7 +1,12 @@
 import tkinter as tk
 from tkinter import messagebox
 from tkinter import ttk
-import subprocess  # Se usará para ejecutar el comando WMIC
+import subprocess  # Para ejecutar el comando WMIC
+import os
+import tempfile
+import requests
+import traceback
+import win32print  # Para listar impresoras
 
 from assets.css.styles import PRIMARY_COLOR, BACKGROUND_COLOR_VIEWS, LABEL_STYLE, BUTTON_STYLE
 from config.settings import API_BASE_URL
@@ -22,6 +27,7 @@ class PackingListView(tk.Frame):
     Vista para listar los procesos de Packing y mostrar los procesos de Picking en espera.
     Al ingresar a la vista se verifica automáticamente el estado de la impresora Zebra (ZD220)
     y se muestra un botón para validar la conexión, junto con una etiqueta que indica el estado.
+    Además se incluye un botón para imprimir la etiqueta y otro para ver las impresoras activas.
     """
     def __init__(self, master=None, user_data=None, login_controller=None, on_logout=None):
         """
@@ -39,7 +45,7 @@ class PackingListView(tk.Frame):
         self.pack(expand=True, fill="both")
         self.create_widgets()
         self.fetch_and_populate()
-        # Realizar verificación de impresora automáticamente al entrar a la vista
+        # Verificación de impresora automática al entrar a la vista
         self.after(100, self.validate_printer)
 
     def create_widgets(self):
@@ -59,11 +65,11 @@ class PackingListView(tk.Frame):
         my_header = Header(
             master=header_frame,
             controller=self.login_controller,
-            on_logout_callback=self.handle_logout  # Se asigna el callback de logout
+            on_logout_callback=self.handle_logout  # Callback de logout
         )
         my_header.pack(side="right")
 
-        # Panel para verificación de impresora Zebra
+        # Panel para verificación de impresora Zebra y botones de impresión y ver impresoras activas
         printer_frame = tk.Frame(self, bg=BACKGROUND_COLOR_VIEWS)
         printer_frame.pack(fill="x", padx=10, pady=5)
         
@@ -82,6 +88,24 @@ class PackingListView(tk.Frame):
             bg=BACKGROUND_COLOR_VIEWS
         )
         self.printer_status_lbl.pack(side="left", padx=5)
+        
+        # Botón para imprimir etiqueta
+        self.print_button = tk.Button(
+            printer_frame,
+            text="Imprimir Etiqueta",
+            command=self.imprimir_etiqueta,
+            **BUTTON_STYLE
+        )
+        self.print_button.pack(side="left", padx=5)
+        
+        # Botón para ver impresoras activas
+        self.show_printers_button = tk.Button(
+            printer_frame,
+            text="Ver Impresoras Activas",
+            command=self.mostrar_impresoras_activas,
+            **BUTTON_STYLE
+        )
+        self.show_printers_button.pack(side="left", padx=5)
 
         # Panel de búsqueda (por nombre)
         search_frame = tk.Frame(self, bg=BACKGROUND_COLOR_VIEWS)
@@ -115,15 +139,14 @@ class PackingListView(tk.Frame):
         left_frame.pack(side="left", fill="both", expand=True, padx=5)
         self.create_table(left_frame)
 
-        # Panel de picking en espera (columna derecha) – widget más angosto
+        # Panel de picking en espera (columna derecha)
         right_frame = tk.Frame(main_frame, bg="white", bd=1, relief="solid")
         right_frame.pack(side="right", fill="y", padx=5)
         self.create_waiting_panel(right_frame)
 
     def validate_printer(self):
         """
-        Método para validar si la impresora Zebra (ZD220) está activa y conectada.
-        Actualiza la etiqueta de estado debajo del botón.
+        Valida si la impresora Zebra (ZD220) está conectada y actualiza el estado.
         """
         is_active = self.check_printer_status()
         if is_active:
@@ -133,36 +156,94 @@ class PackingListView(tk.Frame):
 
     def check_printer_status(self):
         """
-        Verifica si la impresora Zebra ZD220 está conectada vía USB usando el comando WMIC.
-        Se buscan dispositivos cuyo PNPDeviceID contenga los IDs típicos de Zebra:
+        Verifica si la impresora Zebra ZD220 está conectada vía USB usando WMIC.
+        Busca dispositivos cuyo PNPDeviceID contenga IDs típicos de Zebra:
         Vendor: 0A5F y Product: 0044.
-        
-        Esta solución funciona en Windows sin necesidad de librerías externas.
         """
         VENDOR_ID = "0A5F"
         PRODUCT_ID = "0044"
         try:
-            # Ejecuta el comando WMIC para buscar dispositivos con los IDs indicados
             cmd = (
                 'wmic path Win32_PnPEntity where "PNPDeviceID like \'%VID_{0}&PID_{1}%\'" get Name'
                 .format(VENDOR_ID, PRODUCT_ID)
             )
             output = subprocess.check_output(cmd, shell=True, universal_newlines=True)
-            # Se filtra la salida (se ignora la cabecera y líneas vacías)
             lines = [line.strip() for line in output.splitlines() if line.strip() and "Name" not in line]
             return len(lines) > 0
         except Exception as e:
             print("Error al verificar la impresora:", e)
             return False
 
+    def imprimir_etiqueta(self):
+        """
+        Descarga el archivo PDF que contiene la etiqueta, lo guarda de forma temporal
+        y envía el comando de impresión a la impresora Zebra ZD200T.
+        Se agrega manejo de errores y registro de traza en caso de excepción.
+        """
+        pdf_url = "https://www.renfe.com/content/dam/renfe/es/General/PDF-y-otros/Ejemplo-de-descarga-pdf.pdf"
+        try:
+            response = requests.get(pdf_url)
+            if response.status_code == 200:
+                # Guardar el PDF en un archivo temporal
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                    tmp_file.write(response.content)
+                    temp_filename = tmp_file.name
+                
+                # En Windows se utiliza win32api para enviar el trabajo de impresión
+                if os.name == 'nt':
+                    try:
+                        import win32api
+                        win32api.ShellExecute(0, "print", temp_filename, None, ".", 0)
+                    except ImportError:
+                        messagebox.showerror("Error", "No se pudo importar win32api. Instala pywin32 para imprimir en Windows.")
+                        return
+                else:
+                    # En otros sistemas se asume que 'lpr' está correctamente configurado
+                    subprocess.run(["lpr", temp_filename])
+                
+                # Eliminar el archivo temporal luego de enviarlo a imprimir
+                os.remove(temp_filename)
+                messagebox.showinfo("Impresión", "La etiqueta se envió a imprimir correctamente.")
+            else:
+                messagebox.showerror("Error", f"No se pudo descargar la etiqueta (HTTP {response.status_code}).")
+        except Exception as e:
+            # Guardar la traza del error en un archivo de log
+            with open("error_imprimir.log", "a", encoding="utf-8") as f:
+                f.write(traceback.format_exc() + "\n")
+            messagebox.showerror("Error", f"Error al imprimir la etiqueta: {str(e)}")
+
+    def listar_impresoras(self):
+        """
+        Retorna una lista con los nombres de todas las impresoras activas.
+        """
+        try:
+            # Se pueden listar impresoras locales y de red
+            flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+            printers = win32print.EnumPrinters(flags)
+            # El tercer elemento de cada tupla es el nombre de la impresora
+            printer_list = [printer[2] for printer in printers]
+            return printer_list
+        except Exception as e:
+            print("Error al listar impresoras:", e)
+            return []
+
+    def mostrar_impresoras_activas(self):
+        """
+        Muestra en un cuadro de diálogo la lista de impresoras activas.
+        """
+        printer_list = self.listar_impresoras()
+        if printer_list:
+            printers_str = "\n".join(printer_list)
+            messagebox.showinfo("Impresoras Activas", f"Las impresoras activas son:\n{printers_str}")
+        else:
+            messagebox.showinfo("Impresoras Activas", "No se encontraron impresoras activas.")
+
     def create_table(self, parent):
         columns = ("#", "Nombre", "Fecha Inicio", "Fecha Fin", "Estado", "Usuario", "Acciones")
         self.tree = ttk.Treeview(parent, columns=columns, show="headings")
-
         for col in columns:
             self.tree.heading(col, text=col.capitalize())
             self.tree.column(col, anchor="center", width=100)
-
         self.tree.pack(expand=True, fill="both", padx=5, pady=5)
         self.tree.bind("<Double-1>", self.on_row_double_click)
 
@@ -175,7 +256,6 @@ class PackingListView(tk.Frame):
         )
         title.pack(pady=10)
 
-        # Panel para ingresar el código de barras (creación directa del proceso)
         barcode_frame = tk.Frame(parent, bg="white")
         barcode_frame.pack(fill="x", padx=5, pady=5)
 
@@ -189,7 +269,6 @@ class PackingListView(tk.Frame):
 
         self.barcode_entry = tk.Entry(barcode_frame, font=("Arial", 12))
         self.barcode_entry.pack(side="left", padx=5)
-        # Al presionar Enter se crea el proceso de packing directamente
         self.barcode_entry.bind("<Return>", lambda event: self.search_by_barcode())
 
         barcode_btn = tk.Button(
@@ -200,18 +279,15 @@ class PackingListView(tk.Frame):
         )
         barcode_btn.pack(side="left", padx=5)
 
-        # Canvas con scrollbar para mostrar los procesos de picking en espera
         self.waiting_canvas = tk.Canvas(parent, bg="white", width=200)
         self.waiting_canvas.pack(side="left", fill="both", expand=True)
 
         scrollbar = tk.Scrollbar(parent, orient="vertical", command=self.waiting_canvas.yview)
         scrollbar.pack(side="right", fill="y")
-
         self.waiting_canvas.configure(yscrollcommand=scrollbar.set)
 
         self.waiting_frame = tk.Frame(self.waiting_canvas, bg="white")
         self.waiting_canvas.create_window((0, 0), window=self.waiting_frame, anchor="nw")
-
         self.waiting_frame.bind(
             "<Configure>",
             lambda e: self.waiting_canvas.configure(scrollregion=self.waiting_canvas.bbox("all"))
@@ -232,11 +308,9 @@ class PackingListView(tk.Frame):
         processes = packing_obj.get("data", [])
         print("Procesos de packing obtenidos:", processes)
 
-        # Limpiamos la tabla
         for row in self.tree.get_children():
             self.tree.delete(row)
 
-        # Insertamos nuevos registros en la tabla
         for process in processes:
             pid = process.get("id", "")
             name = process.get("name", "")
@@ -250,7 +324,6 @@ class PackingListView(tk.Frame):
         self.populate_waiting_panel()
 
     def populate_waiting_panel(self):
-        # Limpiar el frame interno del canvas
         for widget in self.waiting_frame.winfo_children():
             widget.destroy()
 
@@ -262,7 +335,6 @@ class PackingListView(tk.Frame):
         if waiting_response and isinstance(waiting_response, dict):
             data = waiting_response.get("data", {})
             waiting_data = data.get("picking_processes", [])
-
         self.waiting_data = waiting_data
 
         if not waiting_data:
@@ -280,10 +352,9 @@ class PackingListView(tk.Frame):
         else:
             print("Procesos de picking en espera obtenidos:", waiting_data)
 
-        # Mostramos cada proceso en un frame independiente
         for process in waiting_data:
             item_frame = tk.Frame(self.waiting_frame, bg="white", bd=1, relief="solid")
-            item_frame.pack(fill="x", pady=5, padx=5)
+            item_frame.pack(fill="x", pady=5, padx=(120, 0))
 
             name_lbl = tk.Label(
                 item_frame,
@@ -434,7 +505,6 @@ class PackingListView(tk.Frame):
         Función que se ejecuta al cerrar sesión.
         Destruye la ventana actual y llama al callback de logout para mostrar el login.
         """
-        # Destruir todos los widgets de la ventana principal
         for widget in self.master.winfo_children():
             widget.destroy()
         if self.on_logout:
