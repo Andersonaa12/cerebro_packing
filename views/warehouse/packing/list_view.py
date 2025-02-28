@@ -22,12 +22,21 @@ CENTERED_LABEL_STYLE = {
     "justify": "center"
 }
 
+def log_message(message):
+    """Registra mensajes de depuración en 'print_debug.log'."""
+    try:
+        with open("print_debug.log", "a", encoding="utf-8") as f:
+            f.write(message + "\n")
+    except Exception as log_ex:
+        print("Error al escribir en el log:", log_ex)
+
 class PackingListView(tk.Frame):
     """
     Vista para listar los procesos de Packing y mostrar los procesos de Picking en espera.
     Al ingresar a la vista se verifica automáticamente el estado de la impresora Zebra (ZD220)
     y se muestra un botón para validar la conexión, junto con una etiqueta que indica el estado.
-    Además se incluye un botón para imprimir la etiqueta y otro para ver las impresoras activas.
+    Además se incluye un botón para imprimir la etiqueta y otro para ver las impresoras activas,
+    marcando la impresora predeterminada.
     """
     def __init__(self, master=None, user_data=None, login_controller=None, on_logout=None):
         """
@@ -167,11 +176,14 @@ class PackingListView(tk.Frame):
                 'wmic path Win32_PnPEntity where "PNPDeviceID like \'%VID_{0}&PID_{1}%\'" get Name'
                 .format(VENDOR_ID, PRODUCT_ID)
             )
+            log_message("Ejecutando comando WMIC: " + cmd)
             output = subprocess.check_output(cmd, shell=True, universal_newlines=True)
+            log_message("Salida de WMIC:\n" + output)
             lines = [line.strip() for line in output.splitlines() if line.strip() and "Name" not in line]
+            log_message("Impresoras encontradas: " + str(lines))
             return len(lines) > 0
         except Exception as e:
-            print("Error al verificar la impresora:", e)
+            log_message("Error al verificar la impresora: " + str(e))
             return False
 
     def imprimir_etiqueta(self):
@@ -181,59 +193,80 @@ class PackingListView(tk.Frame):
         Se agrega manejo de errores y registro de traza en caso de excepción.
         """
         pdf_url = "https://www.renfe.com/content/dam/renfe/es/General/PDF-y-otros/Ejemplo-de-descarga-pdf.pdf"
+        log_message("Inicio de impresión de etiqueta.")
         try:
+            log_message("Descargando PDF desde: " + pdf_url)
             response = requests.get(pdf_url)
+            log_message("Código HTTP recibido: " + str(response.status_code))
             if response.status_code == 200:
                 # Guardar el PDF en un archivo temporal
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                     tmp_file.write(response.content)
                     temp_filename = tmp_file.name
+                log_message("PDF guardado temporalmente en: " + temp_filename)
                 
                 # En Windows se utiliza win32api para enviar el trabajo de impresión
                 if os.name == 'nt':
                     try:
                         import win32api
+                        log_message("Enviando a impresión usando win32api.ShellExecute...")
                         win32api.ShellExecute(0, "print", temp_filename, None, ".", 0)
+                        log_message("Se envió la orden de impresión correctamente.")
                     except ImportError:
+                        log_message("Error: No se pudo importar win32api.")
                         messagebox.showerror("Error", "No se pudo importar win32api. Instala pywin32 para imprimir en Windows.")
                         return
+                    except Exception as inner_ex:
+                        log_message("Error al ejecutar ShellExecute: " + str(inner_ex))
+                        raise inner_ex
                 else:
-                    # En otros sistemas se asume que 'lpr' está correctamente configurado
+                    log_message("Enviando a impresión usando comando lpr...")
                     subprocess.run(["lpr", temp_filename])
+                    log_message("Orden de impresión enviada usando lpr.")
                 
                 # Eliminar el archivo temporal luego de enviarlo a imprimir
                 os.remove(temp_filename)
+                log_message("Archivo temporal eliminado.")
                 messagebox.showinfo("Impresión", "La etiqueta se envió a imprimir correctamente.")
             else:
+                log_message("Error al descargar el PDF: Código " + str(response.status_code))
                 messagebox.showerror("Error", f"No se pudo descargar la etiqueta (HTTP {response.status_code}).")
         except Exception as e:
-            # Guardar la traza del error en un archivo de log
-            with open("error_imprimir.log", "a", encoding="utf-8") as f:
-                f.write(traceback.format_exc() + "\n")
+            log_message("Excepción en imprimir_etiqueta: " + traceback.format_exc())
             messagebox.showerror("Error", f"Error al imprimir la etiqueta: {str(e)}")
 
     def listar_impresoras(self):
         """
         Retorna una lista con los nombres de todas las impresoras activas.
+        Se utiliza win32print.EnumPrinters para obtener impresoras locales y de red.
+        Además, se obtiene la impresora predeterminada.
         """
         try:
-            # Se pueden listar impresoras locales y de red
+            # Enumerar impresoras locales y de conexión
             flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
             printers = win32print.EnumPrinters(flags)
-            # El tercer elemento de cada tupla es el nombre de la impresora
             printer_list = [printer[2] for printer in printers]
-            return printer_list
+            default_printer = win32print.GetDefaultPrinter()
+            log_message("Impresoras enumeradas: " + str(printer_list))
+            log_message("Impresora predeterminada: " + str(default_printer))
+            return printer_list, default_printer
         except Exception as e:
-            print("Error al listar impresoras:", e)
-            return []
+            log_message("Error al listar impresoras: " + str(e))
+            return [], None
 
     def mostrar_impresoras_activas(self):
         """
-        Muestra en un cuadro de diálogo la lista de impresoras activas.
+        Muestra en un cuadro de diálogo la lista de impresoras activas,
+        marcando la impresora predeterminada con la etiqueta [DEFAULT].
         """
-        printer_list = self.listar_impresoras()
+        printer_list, default_printer = self.listar_impresoras()
         if printer_list:
-            printers_str = "\n".join(printer_list)
+            printers_str = ""
+            for printer in printer_list:
+                if printer == default_printer:
+                    printers_str += f"{printer} [DEFAULT]\n"
+                else:
+                    printers_str += f"{printer}\n"
             messagebox.showinfo("Impresoras Activas", f"Las impresoras activas son:\n{printers_str}")
         else:
             messagebox.showinfo("Impresoras Activas", "No se encontraron impresoras activas.")
@@ -295,9 +328,9 @@ class PackingListView(tk.Frame):
 
     def fetch_and_populate(self):
         # Obtener procesos de packing
-        print("Solicitando procesos de packing...")
+        log_message("Solicitando procesos de packing...")
         response = self.login_controller.api_client._make_get_request(API_ROUTES["PACKING_LIST"])
-        print("Respuesta de packing:", response)
+        log_message("Respuesta de packing: " + str(response))
 
         if response is None or not isinstance(response, dict) or not response.get("success"):
             messagebox.showerror("Error", "No se pudo obtener el listado de procesos.")
@@ -306,7 +339,7 @@ class PackingListView(tk.Frame):
         data = response.get("data", {})
         packing_obj = data.get("packing_processes", {})
         processes = packing_obj.get("data", [])
-        print("Procesos de packing obtenidos:", processes)
+        log_message("Procesos de packing obtenidos: " + str(processes))
 
         for row in self.tree.get_children():
             self.tree.delete(row)
@@ -327,9 +360,9 @@ class PackingListView(tk.Frame):
         for widget in self.waiting_frame.winfo_children():
             widget.destroy()
 
-        print("Solicitando procesos de picking en espera...")
+        log_message("Solicitando procesos de picking en espera...")
         waiting_response = self.login_controller.api_client._make_get_request(API_ROUTES["PACKING_LIST"])
-        print("Respuesta de picking en espera:", waiting_response)
+        log_message("Respuesta de picking en espera: " + str(waiting_response))
 
         waiting_data = []
         if waiting_response and isinstance(waiting_response, dict):
@@ -338,7 +371,7 @@ class PackingListView(tk.Frame):
         self.waiting_data = waiting_data
 
         if not waiting_data:
-            print("No se han encontrado procesos de picking en espera.")
+            log_message("No se han encontrado procesos de picking en espera.")
             no_content_label = tk.Label(
                 self.waiting_frame,
                 text="No hay procesos de picking en espera.",
@@ -350,7 +383,7 @@ class PackingListView(tk.Frame):
             no_content_label.pack(pady=10)
             return
         else:
-            print("Procesos de picking en espera obtenidos:", waiting_data)
+            log_message("Procesos de picking en espera obtenidos: " + str(waiting_data))
 
         for process in waiting_data:
             item_frame = tk.Frame(self.waiting_frame, bg="white", bd=1, relief="solid")
@@ -399,7 +432,7 @@ class PackingListView(tk.Frame):
             messagebox.showwarning("Advertencia", "Por favor ingresa un código de barras.")
             return
 
-        print(f"Buscando proceso de picking con código de barras: {barcode_value}")
+        log_message("Buscando proceso de picking con código de barras: " + barcode_value)
         process_to_pack = None
         for process in self.waiting_data:
             containers = process.get("containers", [])
@@ -412,27 +445,29 @@ class PackingListView(tk.Frame):
                 break
 
         if not process_to_pack:
+            log_message("No se encontró proceso de picking con el código: " + barcode_value)
             messagebox.showerror("Error", f"No se encontró proceso de picking con el código de barras: {barcode_value}.")
             return
 
         process_id = process_to_pack.get("id")
-        print(f"Creando proceso de packing para el id del proceso de picking: {process_id}")
-
+        log_message("Creando proceso de packing para id: " + str(process_id))
         endpoint = API_ROUTES["PACKING_CREATE"].format(id=process_id)
         result = self.login_controller.api_client._make_post_request(endpoint, {})
 
         if result:
+            log_message("Proceso de packing iniciado para id: " + str(process_id))
             messagebox.showinfo("Proceso Iniciado", f"Se inició el proceso de packing para el proceso id {process_id}.")
             self.fetch_and_populate()
         else:
+            log_message("Error al iniciar el proceso de packing para id: " + str(process_id))
             messagebox.showerror("Error", "No se pudo iniciar el proceso de packing.")
 
     def search(self):
         query = self.search_entry.get().strip()
-        print(f"Buscando procesos con query: {query}")
+        log_message("Buscando procesos con query: " + query)
         url = f"{API_ROUTES['PACKING_LIST']}?q={query}"
         response = self.login_controller.api_client._make_get_request(url)
-        print("Respuesta de búsqueda:", response)
+        log_message("Respuesta de búsqueda: " + str(response))
 
         if response is None or not isinstance(response, dict) or not response.get("success"):
             messagebox.showerror("Error", "No se pudo obtener los resultados de búsqueda.")
@@ -441,7 +476,7 @@ class PackingListView(tk.Frame):
         data = response.get("data", {})
         packing_obj = data.get("packing_processes", {})
         processes = packing_obj.get("data", [])
-        print("Procesos encontrados:", processes)
+        log_message("Procesos encontrados: " + str(processes))
 
         for row in self.tree.get_children():
             self.tree.delete(row)
@@ -458,28 +493,30 @@ class PackingListView(tk.Frame):
 
     def start_packing(self, process):
         process_id = process.get("id")
-        print(f"Iniciando proceso de packing para id: {process_id}")
+        log_message("Iniciando proceso de packing para id: " + str(process_id))
         endpoint = API_ROUTES["PACKING_CREATE"].format(id=process_id)
         result = self.login_controller.api_client._make_post_request(endpoint, {})
-        print("Resultado de iniciar packing:", result)
+        log_message("Resultado de iniciar packing: " + str(result))
 
         if result:
+            log_message("Proceso de packing iniciado para: " + str(process.get("name")))
             messagebox.showinfo("Proceso Iniciado", f"Se inició el proceso de packing para {process.get('name')}.")
             self.fetch_and_populate()
         else:
+            log_message("Error al iniciar el proceso de packing para id: " + str(process_id))
             messagebox.showerror("Error", "No se pudo iniciar el proceso de packing.")
 
     def on_row_double_click(self, event):
         try:
             item_id = self.tree.selection()[0]
         except IndexError:
-            print("No se ha seleccionado ningún elemento.")
+            log_message("No se ha seleccionado ningún elemento.")
             return
 
         item = self.tree.item(item_id)
         values = item["values"]
         process_id = values[0]
-        print(f"Mostrando detalles para el proceso id: {process_id}")
+        log_message("Mostrando detalles para el proceso id: " + str(process_id))
         self.on_show_detail(process_id)
 
     def on_show_detail(self, process_id):
