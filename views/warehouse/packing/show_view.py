@@ -6,11 +6,37 @@ import requests
 import tkinter as tk
 from tkinter import messagebox, ttk
 from datetime import datetime
+import json   # [MODIFICADO] Para leer la config en JSON
+import win32api   # [MODIFICADO] Se asume que estamos en Windows
+import win32print # [MODIFICADO]
 
 from config.settings import API_BASE_URL
 from services.api_routes import API_ROUTES
 from components.barcode_widget import create_barcode_widget
 from assets.css.styles import PRIMARY_COLOR, BUTTON_STYLE
+
+# [MODIFICADO] Archivo JSON donde se guarda la impresora seleccionada
+JSON_CONFIG_FILE = "printer_config.json"
+
+def load_printer_config():
+    """
+    Carga la impresora seleccionada desde un archivo JSON.
+    Estructura esperada del JSON:
+    {
+        "selected_printer": "Nombre de la impresora"
+    }
+    """
+    if not os.path.exists(JSON_CONFIG_FILE):
+        # Si no existe el archivo, devolvemos None para usar la impresora por defecto
+        return None
+
+    try:
+        with open(JSON_CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("selected_printer", None)
+    except Exception as e:
+        print(f"Error al cargar la impresora desde {JSON_CONFIG_FILE}: {e}")
+        return None
 
 class PackingShowView(tk.Frame):
     """
@@ -22,9 +48,9 @@ class PackingShowView(tk.Frame):
         con paginación y ordenamiento ascendente/descendente
       - Botón "Devolver" para regresar a la vista de listado
       - Al confirmar una orden, se descarga la etiqueta (archivo) a partir de la URL
-        devuelta por la API, se imprime en la Zebra ZD220 y se elimina el archivo temporal.
-        Si no existe 'label_url' en la respuesta, se informa al usuario que debe realizar
-        el proceso desde la web, mostrando el Order ID.
+        devuelta por la API, se imprime en la impresora configurada en printer_config.json
+        y se elimina el archivo temporal. Si no existe 'label_url' en la respuesta,
+        se informa al usuario que debe realizar el proceso desde la web, mostrando el Order ID.
     """
     def __init__(self, master=None, process_id=None, login_controller=None, on_back=None):
         """
@@ -38,6 +64,10 @@ class PackingShowView(tk.Frame):
         self.process_id = process_id
         self.login_controller = login_controller
         self.on_back = on_back
+
+        # [MODIFICADO] Cargamos la impresora seleccionada desde el JSON
+        self.selected_printer = load_printer_config() or win32print.GetDefaultPrinter()
+        print(f"[DEBUG] Impresora inicial (PackingShowView): {self.selected_printer}")
 
         # Variables para el escaneo
         self.pending_products = []
@@ -241,7 +271,7 @@ class PackingShowView(tk.Frame):
             barcode_value = "Sin código"
         self.draw_barcode(barcode_value)
 
-        # Verificar si el proceso ha finalizado: si finished_at existe o si todas las órdenes de packing tienen finished_at.
+        # Verificar si el proceso ha finalizado
         packing_orders = process.get("packing_process_orders", [])
         all_orders_finished = (len(packing_orders) > 0 and all(o.get("finished_at") for o in packing_orders))
         if finished_at or all_orders_finished:
@@ -325,7 +355,7 @@ class PackingShowView(tk.Frame):
         """
         Envía la confirmación de la orden a la API.
         Si la respuesta incluye 'label_url', se descarga la etiqueta, se imprime y se elimina el archivo temporal.
-        Si no se incluye 'label_url', se informa al usuario que debe realizar el proceso desde la web, mostrando el Order ID.
+        Si no incluye 'label_url', se informa al usuario que debe realizar el proceso desde la web, mostrando el Order ID.
         """
         endpoint = API_ROUTES["PACKING_CONFIRM"].format(
             packingProcessOrder_id=self.pending_process_order.get("id"),
@@ -360,7 +390,7 @@ class PackingShowView(tk.Frame):
     def download_and_print_label(self, label_url):
         """
         Descarga el archivo de la etiqueta desde label_url, lo guarda en un archivo temporal,
-        lo envía a imprimir en la Zebra ZD220 y luego elimina el archivo.
+        luego llama a self.print_document() para enviarlo a imprimir, y finalmente elimina el archivo temporal.
         """
         try:
             response = requests.get(label_url)
@@ -368,20 +398,27 @@ class PackingShowView(tk.Frame):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                     tmp_file.write(response.content)
                     temp_filename = tmp_file.name
-                # Enviar a imprimir: en Windows se usa win32api, en otros sistemas se utiliza lpr
-                if os.name == 'nt':
-                    try:
-                        import win32api
-                        win32api.ShellExecute(0, "print", temp_filename, None, ".", 0)
-                    except ImportError:
-                        messagebox.showerror("Error", "No se pudo importar win32api para impresión en Windows.")
-                else:
-                    subprocess.run(["lpr", temp_filename])
+                # [MODIFICADO] Usamos la lógica de impresión centralizada
+                print(f"[DEBUG] Archivo temporal para etiqueta: {temp_filename}")
+                self.print_document(temp_filename)
                 os.remove(temp_filename)
             else:
                 messagebox.showerror("Error", "No se pudo descargar la etiqueta para impresión.")
         except Exception as e:
             messagebox.showerror("Error", f"Error al imprimir la etiqueta: {str(e)}")
+
+    def print_document(self, file_path):
+        """
+        [MODIFICADO] Imprime el documento especificado usando la impresora seleccionada,
+        de forma similar a como se hace en list_view.py.
+        """
+        try:
+            print(f"[DEBUG] Enviando {file_path} a la impresora: {self.selected_printer}")
+            win32api.ShellExecute(0, "print", file_path, f'/d:"{self.selected_printer}"', ".", 0)
+            messagebox.showinfo("Impresión", f"Documento enviado a {self.selected_printer}")
+        except Exception as e:
+            print(f"[DEBUG] Error al imprimir: {e}")
+            messagebox.showerror("Error", f"Error al imprimir: {str(e)}")
 
     def update_confirmed_orders_table(self, confirmed):
         """
@@ -514,3 +551,18 @@ class PackingShowView(tk.Frame):
         text.pack(expand=True, fill="both", padx=10, pady=10)
         close_btn = tk.Button(top, text="Cerrar", command=top.destroy, **BUTTON_STYLE)
         close_btn.pack(pady=5)
+
+
+# NOTA: Si lo ejecutas directamente, puedes hacer pruebas, pero normalmente
+#       esta vista se navega desde la vista principal en tu aplicación real.
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.title("Packing Show View")
+    root.geometry("1000x700")
+
+    # A modo de ejemplo, pasamos process_id y login_controller nulos.
+    # En tu aplicación real, debes pasarles los objetos adecuados.
+    app = PackingShowView(master=root, process_id=123, login_controller=None)
+    app.pack(expand=True, fill="both")
+
+    root.mainloop()
