@@ -90,6 +90,31 @@ class PackingListView(tk.Frame):
         log_message("Impresora inicial: " + self.selected_printer)
 
         self.pack(expand=True, fill="both")
+        
+        # ----- Set up a TTK Style for a nicer look -----
+        self.style = ttk.Style()
+        # You can pick any theme you like, e.g. "clam", "default", "alt", etc.
+        self.style.theme_use("clam")
+        
+        # Treeview style
+        self.style.configure(
+            "Treeview",
+            background="white",
+            foreground="black",
+            rowheight=26,
+            fieldbackground="white",
+            bordercolor="lightgray",
+            borderwidth=1
+        )
+        # Treeview headings
+        self.style.configure(
+            "Treeview.Heading",
+            font=("Arial", 10, "bold"),
+            background="lightgray",
+            foreground="black"
+        )
+        self.style.map("Treeview", background=[("selected", "#cce6ff")])
+        
         self.create_widgets()
         self.fetch_and_populate()
 
@@ -97,56 +122,83 @@ class PackingListView(tk.Frame):
         # Header
         header_frame = tk.Frame(self, bg=PRIMARY_COLOR)
         header_frame.pack(fill="x", padx=10, pady=5)
-        title_lbl = tk.Label(header_frame, text="Listado de Procesos - Packing",
-                             font=("Arial", 16, "bold"), bg=PRIMARY_COLOR, fg="white")
+
+        title_lbl = tk.Label(
+            header_frame,
+            text="Listado de Procesos - Packing",
+            font=("Arial", 16, "bold"),
+            bg=PRIMARY_COLOR,
+            fg="white"
+        )
         title_lbl.pack(side="left", padx=5)
-        my_header = Header(master=header_frame, controller=self.login_controller,
-                           on_logout_callback=self.handle_logout)
+
+        my_header = Header(
+            master=header_frame,
+            controller=self.login_controller,
+            on_logout_callback=self.handle_logout
+        )
         my_header.pack(side="right")
 
-        # Selección de impresora
-        printer_frame = tk.Frame(self, bg=BACKGROUND_COLOR_VIEWS)
-        printer_frame.pack(fill="x", padx=10, pady=5)
+        # Contenedor único para los controles (búsqueda e impresora)
+        controls_frame = tk.Frame(self, bg=BACKGROUND_COLOR_VIEWS)
+        controls_frame.pack(fill="x", padx=10, pady=5)
 
-        tk.Label(printer_frame, text="Selecciona Impresora:", bg=BACKGROUND_COLOR_VIEWS,
-                 font=("Arial", 12)).pack(side="left", padx=5)
+        # Panel de búsqueda (alineado a la izquierda)
+        search_frame = tk.Frame(controls_frame, bg=BACKGROUND_COLOR_VIEWS)
+        search_frame.pack(side="left", padx=5, pady=5)
+
+        self.search_entry = tk.Entry(search_frame, font=("Arial", 12))
+        self.search_entry.pack(side="left", padx=5)
+        # Insertar texto placeholder
+        placeholder = "Buscar por nombre"
+        self.search_entry.insert(0, placeholder)
+        self.search_entry.config(fg="gray")
+        self.search_entry.bind("<FocusIn>", lambda event: self._clear_placeholder(event, placeholder))
+        self.search_entry.bind("<FocusOut>", lambda event: self._add_placeholder(event, placeholder))
+
+        search_btn = tk.Button(
+            search_frame,
+            text="Buscar",
+            command=self.search,
+            **BUTTON_STYLE
+        )
+        search_btn.pack(side="left", padx=5)
+
+        # Panel de selección de impresora (alineado a la derecha)
+        printer_frame = tk.Frame(controls_frame, bg=BACKGROUND_COLOR_VIEWS)
+        printer_frame.pack(side="right", padx=5, pady=5)
+
+        tk.Label(
+            printer_frame,
+            text="Impresora:",
+            bg=BACKGROUND_COLOR_VIEWS,
+            font=("Arial", 12)
+        ).pack(side="left", padx=5)
+
         self.printer_combobox = ttk.Combobox(printer_frame, state="readonly")
         self.printer_combobox.pack(side="left", padx=5)
-
-        # Obtiene la lista de impresoras y setea la impresora inicial
         self.populate_printer_list()
         self.printer_combobox.bind("<<ComboboxSelected>>", self.on_printer_selected)
 
-        # Botón para imprimir prueba
-        test_print_btn = tk.Button(printer_frame, text="Prueba Impresión", command=self.test_print, **BUTTON_STYLE)
-        test_print_btn.pack(side="left", padx=5)
-
-        # Botón para guardar configuración de la impresora
-        save_config_btn = tk.Button(printer_frame, text="Guardar Configuración", command=self.save_printer_settings, **BUTTON_STYLE)
+        save_config_btn = tk.Button(
+            printer_frame,
+            text="Guardar Configuración",
+            command=self.save_printer_settings,
+            **BUTTON_STYLE
+        )
         save_config_btn.pack(side="left", padx=5)
 
-        # Panel de búsqueda
-        search_frame = tk.Frame(self, bg=BACKGROUND_COLOR_VIEWS)
-        search_frame.pack(fill="x", padx=10, pady=5)
-
-        search_lbl = tk.Label(search_frame, text="Buscar por nombre:", font=("Arial", 12),
-                              bg=BACKGROUND_COLOR_VIEWS)
-        search_lbl.pack(side="left", padx=5)
-        self.search_entry = tk.Entry(search_frame, font=("Arial", 12))
-        self.search_entry.pack(side="left", padx=5)
-        search_btn = tk.Button(search_frame, text="Buscar", command=self.search, **BUTTON_STYLE)
-        search_btn.pack(side="left", padx=5)
-
-        # Área principal
+        # ----- Área principal -----
         main_frame = tk.Frame(self, bg=BACKGROUND_COLOR_VIEWS)
         main_frame.pack(expand=True, fill="both", padx=10, pady=10)
 
-        left_frame = tk.Frame(main_frame, bg="white", bd=1, relief="solid")
+        left_frame = tk.Frame(main_frame, bg="white", bd=2, relief="groove")
         left_frame.pack(side="left", fill="both", expand=True, padx=5)
-        self.create_table(left_frame)
 
-        right_frame = tk.Frame(main_frame, bg="white", bd=1, relief="solid")
+        right_frame = tk.Frame(main_frame, bg="white", bd=2, relief="groove")
         right_frame.pack(side="right", fill="y", padx=5)
+
+        self.create_table(left_frame)
         self.create_waiting_panel(right_frame)
 
     def populate_printer_list(self):
@@ -182,6 +234,18 @@ class PackingListView(tk.Frame):
         save_printer_config(self.selected_printer)
         messagebox.showinfo("Configuración", f"La impresora '{self.selected_printer}' se ha guardado correctamente.")
 
+    def _clear_placeholder(self, event, placeholder):
+        """Elimina el placeholder cuando el Entry recibe el foco."""
+        if self.search_entry.get() == placeholder:
+            self.search_entry.delete(0, tk.END)
+            self.search_entry.config(fg="black")
+
+    def _add_placeholder(self, event, placeholder):
+        """Restaura el placeholder si el Entry queda vacío al perder el foco."""
+        if not self.search_entry.get():
+            self.search_entry.insert(0, placeholder)
+            self.search_entry.config(fg="gray")
+
     def test_print(self):
         """Genera un archivo de prueba y lo envía a la impresora seleccionada."""
         try:
@@ -211,42 +275,64 @@ class PackingListView(tk.Frame):
             return [], None
 
     def create_table(self, parent):
+        """
+        Creates the table with scrollbars in the left frame.
+        """
         columns = ("#", "Nombre", "Fecha Inicio", "Fecha Fin", "Estado", "Usuario", "Acciones")
-        self.tree = ttk.Treeview(parent, columns=columns, show="headings")
+
+        # Frame to hold the Treeview + scrollbar
+        table_frame = tk.Frame(parent, bg="white")
+        table_frame.pack(expand=True, fill="both", padx=5, pady=5)
+
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", style="Treeview")
         for col in columns:
             self.tree.heading(col, text=col.capitalize())
-            self.tree.column(col, anchor="center", width=100)
-        self.tree.pack(expand=True, fill="both", padx=5, pady=5)
+            self.tree.column(col, anchor="center", width=120)
+
+        # Vertical scrollbar
+        tree_scroll_y = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=tree_scroll_y.set)
+        tree_scroll_y.pack(side="right", fill="y")
+
+        # (Optional) Horizontal scrollbar if you have wide columns
+        # tree_scroll_x = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
+        # self.tree.configure(xscrollcommand=tree_scroll_x.set)
+        # tree_scroll_x.pack(side="bottom", fill="x")
+
+        self.tree.pack(side="left", expand=True, fill="both")
+
         self.tree.bind("<Double-1>", self.on_row_double_click)
 
     def create_waiting_panel(self, parent):
-        title = tk.Label(parent, text="Procesos de Picking - En espera",
-                         font=("Arial", 14, "bold"), bg="white")
+        title = tk.Label(parent, text="Contenedores sin Procesar",
+                 font=("Arial", 12, "bold"), bg="#f58033", fg="white", padx=4, pady=4)
         title.pack(pady=10)
+
 
         barcode_frame = tk.Frame(parent, bg="white")
         barcode_frame.pack(fill="x", padx=5, pady=5)
-        barcode_lbl = tk.Label(barcode_frame, text="Código de cesta:",
-                               font=("Arial", 12), bg="white")
-        barcode_lbl.pack(side="left", padx=5)
+
 
         self.barcode_entry = tk.Entry(barcode_frame, font=("Arial", 12))
         self.barcode_entry.pack(side="left", padx=5)
         self.barcode_entry.bind("<Return>", lambda event: self.search_by_barcode())
 
-        barcode_btn = tk.Button(barcode_frame, text="Crear Proceso",
+        barcode_btn = tk.Button(barcode_frame, text="Escanear",
                                 command=self.search_by_barcode, **BUTTON_STYLE)
         barcode_btn.pack(side="left", padx=5)
 
-        self.waiting_canvas = tk.Canvas(parent, bg="white", width=200)
+        # A canvas for the "waiting" items plus a scrollbar
+        self.waiting_canvas = tk.Canvas(parent, bg="white", width=250, highlightthickness=0)
         self.waiting_canvas.pack(side="left", fill="both", expand=True)
 
-        scrollbar = tk.Scrollbar(parent, orient="vertical", command=self.waiting_canvas.yview)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=self.waiting_canvas.yview)
         scrollbar.pack(side="right", fill="y")
+
         self.waiting_canvas.configure(yscrollcommand=scrollbar.set)
 
         self.waiting_frame = tk.Frame(self.waiting_canvas, bg="white")
         self.waiting_canvas.create_window((0, 0), window=self.waiting_frame, anchor="nw")
+
         self.waiting_frame.bind(
             "<Configure>",
             lambda e: self.waiting_canvas.configure(scrollregion=self.waiting_canvas.bbox("all"))
@@ -266,9 +352,11 @@ class PackingListView(tk.Frame):
         processes = packing_obj.get("data", [])
         log_message("Procesos de packing obtenidos: " + str(processes))
 
+        # Clear current table rows
         for row in self.tree.get_children():
             self.tree.delete(row)
 
+        # Insert updated rows
         for process in processes:
             pid = process.get("id", "")
             name = process.get("name", "")
@@ -282,6 +370,7 @@ class PackingListView(tk.Frame):
         self.populate_waiting_panel()
 
     def populate_waiting_panel(self):
+        # Clear existing items
         for widget in self.waiting_frame.winfo_children():
             widget.destroy()
 
@@ -298,31 +387,32 @@ class PackingListView(tk.Frame):
         if not waiting_data:
             log_message("No se han encontrado procesos de picking en espera.")
             no_content_label = tk.Label(
-                self.waiting_frame, text="No hay procesos de picking en espera.",
-                bg="white", font=("Arial", 10), anchor="center", justify="center"
+                self.waiting_frame, 
+                text="No hay procesos de picking en espera.",
+                bg="white", 
+                font=("Arial", 10), 
+                anchor="center", 
+                justify="center"
             )
             no_content_label.pack(pady=10)
             return
         else:
             log_message("Procesos de picking en espera obtenidos: " + str(waiting_data))
 
+        # Populate the waiting items
         for process in waiting_data:
             item_frame = tk.Frame(self.waiting_frame, bg="white", bd=1, relief="solid")
-            item_frame.pack(fill="x", pady=5, padx=(120, 0))
+            item_frame.pack(fill="x", pady=5, padx=(30, 10))
 
             name_lbl = tk.Label(item_frame, text=f"Nombre: {process.get('name', '')}",
                                 **CENTERED_LABEL_STYLE)
             name_lbl.pack(anchor="center", padx=5, pady=2)
 
-            orders_lbl = tk.Label(item_frame, text=f"# Órdenes: {process.get('num_ordenes', 0)}",
-                                  **CENTERED_LABEL_STYLE)
-            orders_lbl.pack(anchor="center", padx=5, pady=2)
-
             codes = ", ".join([
                 c.get("container", {}).get("bar_code", "") for c in process.get("containers", [])
             ])
             codes_lbl = tk.Label(item_frame, text=f"Código de cesta: {codes}",
-                                 **CENTERED_LABEL_STYLE)
+                                **CENTERED_LABEL_STYLE)
             codes_lbl.pack(anchor="center", padx=5, pady=2)
 
             if process.get("containers"):
@@ -331,9 +421,14 @@ class PackingListView(tk.Frame):
                     barcode_w = create_barcode_widget(item_frame, first_barcode)
                     barcode_w.pack(anchor="center", padx=5, pady=5)
 
-            btn_start = tk.Button(item_frame, text="Iniciar Proceso - Packing",
-                                  command=lambda p=process: self.start_packing(p), **BUTTON_STYLE)
+            btn_start = tk.Button(item_frame, text="Iniciar Packing",
+                                command=lambda p=process: self.start_packing(p),
+                                **BUTTON_STYLE)
             btn_start.pack(anchor="center", padx=5, pady=5)
+
+            # Agregar una línea separadora después de cada item_frame
+            separator = tk.Frame(self.waiting_frame, height=2, bg="white")
+            separator.pack(fill="x", padx=20, pady=10)
 
     def search_by_barcode(self):
         barcode_value = self.barcode_entry.get().strip()
@@ -429,17 +524,21 @@ class PackingListView(tk.Frame):
         self.on_show_detail(process_id)
 
     def on_show_detail(self, process_id):
+        # Navegar a la vista de detalle
         self.destroy()
         from views.warehouse.packing.show_view import PackingShowView
-        detail_view = PackingShowView(master=self.master, process_id=process_id,
-                                      login_controller=self.login_controller,
-                                      on_back=self.show_list_view)
+        detail_view = PackingShowView(
+            master=self.master,
+            process_id=process_id,
+            login_controller=self.login_controller,
+            on_back=self.show_list_view
+        )
         detail_view.pack(expand=True, fill="both")
 
     def show_list_view(self):
         for widget in self.master.winfo_children():
             widget.destroy()
-        from views.warehouse.packing.list_view import PackingListView
+        from views.warehouse.packing.list_view import PackingListViewff
         list_view = PackingListView(master=self.master, login_controller=self.login_controller)
         list_view.pack(expand=True, fill="both")
 
@@ -465,6 +564,6 @@ class PackingListView(tk.Frame):
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Packing List View")
-    root.geometry("800x600")
+    root.geometry("1000x600")  # Slightly wider for a more spacious UI
     app = PackingListView(master=root)
     root.mainloop()
