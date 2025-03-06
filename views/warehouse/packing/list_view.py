@@ -93,7 +93,6 @@ class PackingListView(tk.Frame):
         
         # ----- Set up a TTK Style for a nicer look -----
         self.style = ttk.Style()
-        # You can pick any theme you like, e.g. "clam", "default", "alt", etc.
         self.style.theme_use("clam")
         
         # Treeview style
@@ -251,7 +250,6 @@ class PackingListView(tk.Frame):
         try:
             with tempfile.NamedTemporaryFile("w", delete=False, suffix=".txt") as temp_file:
                 temp_file.write("Impresión de prueba desde PackingListView.\n")
-                temp_file.write("Esta es una impresión de prueba para verificar que la impresora seleccionada funcione correctamente.\n")
                 temp_file.write("Si aparece, significa que se imprimió correctamente.\n")
                 temp_file_path = temp_file.name
 
@@ -294,31 +292,35 @@ class PackingListView(tk.Frame):
         self.tree.configure(yscrollcommand=tree_scroll_y.set)
         tree_scroll_y.pack(side="right", fill="y")
 
-        # (Optional) Horizontal scrollbar if you have wide columns
-        # tree_scroll_x = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
-        # self.tree.configure(xscrollcommand=tree_scroll_x.set)
-        # tree_scroll_x.pack(side="bottom", fill="x")
-
         self.tree.pack(side="left", expand=True, fill="both")
 
         self.tree.bind("<Double-1>", self.on_row_double_click)
 
     def create_waiting_panel(self, parent):
-        title = tk.Label(parent, text="Contenedores sin Procesar",
-                 font=("Arial", 12, "bold"), bg="#f58033", fg="white", padx=4, pady=4)
+        title = tk.Label(
+            parent, 
+            text="Contenedores sin Procesar",
+            font=("Arial", 12, "bold"), 
+            bg="#f58033", 
+            fg="white", 
+            padx=4, 
+            pady=4
+        )
         title.pack(pady=10)
-
 
         barcode_frame = tk.Frame(parent, bg="white")
         barcode_frame.pack(fill="x", padx=5, pady=5)
-
 
         self.barcode_entry = tk.Entry(barcode_frame, font=("Arial", 12))
         self.barcode_entry.pack(side="left", padx=5)
         self.barcode_entry.bind("<Return>", lambda event: self.search_by_barcode())
 
-        barcode_btn = tk.Button(barcode_frame, text="Escanear",
-                                command=self.search_by_barcode, **BUTTON_STYLE)
+        barcode_btn = tk.Button(
+            barcode_frame, 
+            text="Escanear",
+            command=self.search_by_barcode, 
+            **BUTTON_STYLE
+        )
         barcode_btn.pack(side="left", padx=5)
 
         # A canvas for the "waiting" items plus a scrollbar
@@ -415,22 +417,27 @@ class PackingListView(tk.Frame):
                                 **CENTERED_LABEL_STYLE)
             codes_lbl.pack(anchor="center", padx=5, pady=2)
 
+            # Si hay contenedores, tomamos el primero para generar el barcode
             if process.get("containers"):
                 first_barcode = process.get("containers")[0].get("container", {}).get("bar_code", "")
                 if first_barcode:
                     barcode_w = create_barcode_widget(item_frame, first_barcode)
                     barcode_w.pack(anchor="center", padx=5, pady=5)
 
-            btn_start = tk.Button(item_frame, text="Iniciar Packing",
-                                command=lambda p=process: self.start_packing(p),
-                                **BUTTON_STYLE)
+            btn_start = tk.Button(
+                item_frame, 
+                text="Iniciar Packing",
+                command=lambda p=process: self.start_packing(p),
+                **BUTTON_STYLE
+            )
             btn_start.pack(anchor="center", padx=5, pady=5)
 
-            # Agregar una línea separadora después de cada item_frame
+            # Agregar una línea separadora
             separator = tk.Frame(self.waiting_frame, height=2, bg="white")
             separator.pack(fill="x", padx=20, pady=10)
 
     def search_by_barcode(self):
+        """Búsqueda rápida de un proceso de picking en espera por código de barras."""
         barcode_value = self.barcode_entry.get().strip()
         if not barcode_value:
             messagebox.showwarning("Advertencia", "Por favor ingresa un código de barras.")
@@ -453,18 +460,8 @@ class PackingListView(tk.Frame):
             messagebox.showerror("Error", f"No se encontró proceso de picking con el código de barras: {barcode_value}.")
             return
 
-        process_id = process_to_pack.get("id")
-        log_message("Creando proceso de packing para id: " + str(process_id))
-        endpoint = API_ROUTES["PACKING_CREATE"].format(id=process_id)
-        result = self.login_controller.api_client._make_post_request(endpoint, {})
-
-        if result:
-            log_message(f"Proceso de packing iniciado para id: {process_id}")
-            messagebox.showinfo("Proceso Iniciado", f"Se inició el proceso de packing para el proceso id {process_id}.")
-            self.fetch_and_populate()
-        else:
-            log_message(f"Error al iniciar el proceso de packing para id: {process_id}")
-            messagebox.showerror("Error", "No se pudo iniciar el proceso de packing.")
+        # Iniciar el packing
+        self.start_packing(process_to_pack)
 
     def search(self):
         query = self.search_entry.get().strip()
@@ -496,6 +493,10 @@ class PackingListView(tk.Frame):
             self.tree.insert("", "end", values=(pid, name, started_at, finished_at, status, user, actions))
 
     def start_packing(self, process):
+        """
+        Llama a la API para crear/iniciar el proceso de packing (POST).
+        Si es exitoso, navega a la vista de detalle del proceso creado.
+        """
         process_id = process.get("id")
         log_message(f"Iniciando proceso de packing para id: {process_id}")
         endpoint = API_ROUTES["PACKING_CREATE"].format(id=process_id)
@@ -503,14 +504,24 @@ class PackingListView(tk.Frame):
         log_message(f"Resultado de iniciar packing: {result}")
 
         if result:
+            # Mostramos notificación
             log_message(f"Proceso de packing iniciado para: {process.get('name')}")
             messagebox.showinfo("Proceso Iniciado", f"Se inició el proceso de packing para {process.get('name')}.")
-            self.fetch_and_populate()
+
+            # Aquí navegamos a la vista de detalle:
+            # Usamos el mismo 'process_id' (el de picking) o el ID nuevo que devuelva la API si fuera diferente.
+            # Asumiendo que es el mismo ID de proceso de packing a visualizar:
+            # (Si la API devuelve un nuevo "packing_process_id" en `result["data"]`, úsalo.)
+            self.on_show_detail(process_id)
+
         else:
             log_message(f"Error al iniciar el proceso de packing para id: {process_id}")
             messagebox.showerror("Error", "No se pudo iniciar el proceso de packing.")
 
     def on_row_double_click(self, event):
+        """
+        Al hacer doble clic en un proceso de la tabla, mostramos su detalle.
+        """
         try:
             item_id = self.tree.selection()[0]
         except IndexError:
@@ -524,7 +535,9 @@ class PackingListView(tk.Frame):
         self.on_show_detail(process_id)
 
     def on_show_detail(self, process_id):
-        # Navegar a la vista de detalle
+        """
+        Destruye esta vista y crea la vista de detalle (PackingShowView).
+        """
         self.destroy()
         from views.warehouse.packing.show_view import PackingShowView
         detail_view = PackingShowView(
@@ -536,9 +549,13 @@ class PackingListView(tk.Frame):
         detail_view.pack(expand=True, fill="both")
 
     def show_list_view(self):
+        """
+        Cuando volvemos desde la vista de detalle a esta vista (opcional).
+        """
         for widget in self.master.winfo_children():
             widget.destroy()
-        from views.warehouse.packing.list_view import PackingListViewff
+
+        # Volvemos a crear la vista actual
         list_view = PackingListView(master=self.master, login_controller=self.login_controller)
         list_view.pack(expand=True, fill="both")
 
@@ -551,7 +568,6 @@ class PackingListView(tk.Frame):
     def print_document(self, file_path):
         """
         Imprime el documento especificado usando la impresora seleccionada.
-        Se utiliza win32api.ShellExecute para enviar la orden de impresión.
         """
         try:
             log_message(f"Enviando {file_path} a la impresora: {self.selected_printer}")
@@ -561,9 +577,11 @@ class PackingListView(tk.Frame):
             log_message(f"Error al imprimir: {e}")
             messagebox.showerror("Error", f"Error al imprimir: {str(e)}")
 
+
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Packing List View")
-    root.geometry("1000x600")  # Slightly wider for a more spacious UI
-    app = PackingListView(master=root)
-    root.mainloop()
+    root.geometry("1000x600")  # Ajusta el tamaño a tu gusto
+    # En una app real, pasarías un login_controller válido
+    app = PackingListView(master=root, login_controller=None)
+    app.mainloop()
