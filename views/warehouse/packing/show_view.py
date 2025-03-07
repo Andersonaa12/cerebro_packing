@@ -47,21 +47,23 @@ def load_printer_config():
 
 class PackingShowView(tk.Frame):
     """
-    Vista de Packing con una organización en 2 filas (arriba/abajo) y varias columnas.
-    Arriba:
-      - Esquina sup. izq.: "Información del Proceso" + "Información del Pedido" (en formato de dos columnas).
-      - Esquina sup. der.: Campo de escaneo (SKU/BarCode).
-    Abajo:
-      - Izquierda: Tabla de productos por escanear (1/3 del ancho)
-      - Derecha: Órdenes confirmadas (2/3 del ancho).
+    Vista de Packing con una organización en la parte superior (3 columnas) y la parte inferior (2 columnas).
+    
+    Parte superior (top_frame):
+      - Columna 0 (Izquierda): Información del Pedido Actual
+      - Columna 1 (Centro):  Escanear (SKU - Cod.barras)
+      - Columna 2 (Derecha): Información del Proceso
+
+    Parte inferior (bottom_frame):
+      - Columna 0 (Izquierda, más ancha): Tabla de Productos por Escanear
+      - Columna 1 (Derecha): Órdenes Confirmadas
     
     Lógica:
       - Escaneo de productos (cuando se completa la cantidad de todos los productos,
         se confirma automáticamente la orden y pasa a la siguiente).
       - Doble clic en producto => muestra detalle (placeholder).
       - Doble clic en orden confirmada => muestra detalle.
-      - Beep solo en error (producto que no pertenece, etc.).
-      - Se elimina la lógica de "etiqueta de envío" para agilizar el flujo.
+      - Se emite beep solo en error (producto no pertenece, etc.).
     """
     def __init__(self, master=None, process_id=None, login_controller=None, on_back=None):
         super().__init__(master, bg="white")
@@ -103,48 +105,53 @@ class PackingShowView(tk.Frame):
         """
         Layout:
           - Encabezado (barra naranja superior)
-          - top_frame (Info Proceso + Info Pedido + Campo Escaneo)
-          - bottom_frame (Tabla de Productos a la izq. y Órdenes Confirmadas a la der.)
+          - Sección superior (top_frame) con 3 columnas:
+              [Información del Pedido Actual] - [Escanear (SKU)] - [Información del Proceso]
+          - Sección inferior (bottom_frame) con 2 columnas:
+              [Productos por Escanear (grande)] - [Órdenes Confirmadas]
         """
         self.create_header()
 
-        # Frame superior (info proceso, info pedido, campo escaneo)
-        top_frame = tk.Frame(self, bg="white", bd=1, relief="solid")
+        # Sección superior (con borde "doble")
+        top_frame = tk.Frame(self, bg="white", bd=2, relief="ridge")
         top_frame.pack(fill="x", padx=10, pady=5)
 
-        # Frame para la información principal (proceso + pedido) en 2 columnas, parte superior izq
-        info_frame = tk.Frame(top_frame, bg="white")
-        info_frame.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        # Configuramos 3 columnas para top_frame
+        top_frame.columnconfigure(0, weight=1)
+        top_frame.columnconfigure(1, weight=1)
+        top_frame.columnconfigure(2, weight=1)
 
-        # "Información del Proceso" (fila 0, col 0)
-        self.process_info_frame = tk.Frame(info_frame, bg="white")
-        self.process_info_frame.grid(row=0, column=0, sticky="nw", padx=5, pady=5)
+        # === Columna 0 (Izquierda): Información del Pedido Actual ===
+        order_container = tk.Frame(top_frame, bg="white", bd=2, relief="ridge")
+        order_container.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self.create_current_order_info_panel(order_container)
 
-        # "Información del Pedido" (fila 0, col 1)
-        self.order_info_frame = tk.Frame(info_frame, bg="white", bd=1, relief="solid")
-        self.order_info_frame.grid(row=0, column=1, sticky="nw", padx=5, pady=5)
+        # === Columna 1 (Centro): Escanear (SKU - Cod.barras) ===
+        scan_container = tk.Frame(top_frame, bg="white", bd=2, relief="ridge")
+        scan_container.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        self.create_scan_panel(scan_container)
 
-        # Crea paneles
-        self.create_process_info_panel(self.process_info_frame)
-        self.create_current_order_info_panel(self.order_info_frame)
+        # === Columna 2 (Derecha): Información del Proceso ===
+        process_container = tk.Frame(top_frame, bg="white", bd=2, relief="ridge")
+        process_container.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
+        self.create_process_info_panel(process_container)
 
-        # Frame superior derecho (campo de escaneo)
-        scan_frame = tk.Frame(top_frame, bg="white", bd=1, relief="solid")
-        scan_frame.pack(side="right", fill="y", padx=5, pady=5)
-        self.create_scan_panel(scan_frame)
-
-        # Frame inferior
-        bottom_frame = tk.Frame(self, bg="white", bd=1, relief="solid")
+        # Sección inferior (con borde "doble")
+        bottom_frame = tk.Frame(self, bg="white", bd=2, relief="ridge")
         bottom_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # Izquierda => Tabla de productos
-        self.products_frame = tk.Frame(bottom_frame, bg="white")
-        self.products_frame.pack(side="left", fill="both", expand=False, padx=5, pady=5)
+        # Configuramos 2 columnas para bottom_frame
+        bottom_frame.columnconfigure(0, weight=2)   # Productos por Escanear más grande
+        bottom_frame.columnconfigure(1, weight=1)   # Órdenes Confirmadas
+
+        # === Columna 0: Tabla de Productos por Escanear ===
+        self.products_frame = tk.Frame(bottom_frame, bg="white", bd=2, relief="ridge")
+        self.products_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         self.create_products_table_panel(self.products_frame)
 
-        # Derecha => Órdenes confirmadas
-        self.confirmed_orders_frame = tk.Frame(bottom_frame, bg="white", bd=1, relief="solid")
-        self.confirmed_orders_frame.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        # === Columna 1: Órdenes Confirmadas ===
+        self.confirmed_orders_frame = tk.Frame(bottom_frame, bg="white", bd=2, relief="ridge")
+        self.confirmed_orders_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
         self.create_confirmed_orders_table()
 
     def create_header(self):
@@ -174,29 +181,14 @@ class PackingShowView(tk.Frame):
         )
         back_btn.pack()
 
-    def create_process_info_panel(self, container):
-        """
-        Info del Proceso (Nombre, Iniciado, Finalizado, Creador).
-        """
-        tk.Label(container, text="Información del Proceso", font=("Arial", 14, "bold"), fg=PRIMARY_COLOR).pack(pady=5)
-
-        self.lbl_nombre = tk.Label(container, text="Nombre: -", font=("Arial", 12), bg="white")
-        self.lbl_nombre.pack(anchor="w", pady=2)
-
-        self.lbl_iniciado = tk.Label(container, text="Iniciado: -", font=("Arial", 12), bg="white")
-        self.lbl_iniciado.pack(anchor="w", pady=2)
-
-        self.lbl_finalizado = tk.Label(container, text="Finalizado: -", font=("Arial", 12), bg="white")
-        self.lbl_finalizado.pack(anchor="w", pady=2)
-
-        self.lbl_creado_por = tk.Label(container, text="Creado por: -", font=("Arial", 12), bg="white")
-        self.lbl_creado_por.pack(anchor="w", pady=2)
-
+    # --------------------------------------------------------------------------
+    # Panel: Información del Pedido Actual (Columna 0)
+    # --------------------------------------------------------------------------
     def create_current_order_info_panel(self, container):
         """
-        Info del Pedido Actual (ID, Cliente, Dirección, etc.) en 2 columnas (grid)
+        Información del Pedido Actual (Columna Izquierda).
         """
-        tk.Label(container, text="Información del Pedido Actual", font=("Arial", 14, "bold"), fg=PRIMARY_COLOR).pack(pady=5)
+        tk.Label(container, text="Información Pedido Actual", font=("Arial", 14, "bold"), fg=PRIMARY_COLOR).pack(pady=5)
 
         content_frame = tk.Frame(container, bg="white")
         content_frame.pack(fill="x", padx=5, pady=5)
@@ -232,29 +224,60 @@ class PackingShowView(tk.Frame):
         )
         self.lbl_shipping_method.grid(row=row_idx, column=1, sticky="w", padx=5, pady=2)
 
+    # --------------------------------------------------------------------------
+    # Panel: Escanear (SKU - Cod.barras) (Columna 1)
+    # --------------------------------------------------------------------------
     def create_scan_panel(self, container):
-        """
-        Esquina superior derecha: Campo de escaneo (SKU/barcode).
-        """
-        tk.Label(container, text="Escanear (SKU - Cod.barras): ", font=("Arial", 14, "bold"), fg=PRIMARY_COLOR).pack(pady=5)
+        tk.Label(container, text="Escanear - Código de Barras", font=("Arial", 14, "bold"), fg=PRIMARY_COLOR).pack(pady=5)
 
         scan_frame = tk.Frame(container, bg="white")
         scan_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        lbl_barcode = tk.Label(scan_frame, text="Código de Barras:", font=("Arial", 12), bg="white")
-        lbl_barcode.pack(side="left", padx=5)
-
-        self.entry_barcode = tk.Entry(scan_frame, font=("Arial", 12))
+        # Configuramos un estilo personalizado para la entrada con ttk
+        style = ttk.Style()
+        style.configure("Custom.TEntry", padding=5, relief="flat", font=("Arial", 12), foreground="black")
+        
+        # Usamos ttk.Entry en lugar de tk.Entry
+        self.entry_barcode = ttk.Entry(scan_frame, style="Custom.TEntry")
         self.entry_barcode.pack(side="left", padx=5, fill="x", expand=True)
         self.entry_barcode.bind("<Return>", self.on_barcode_enter)
 
         self.lbl_scan_message = tk.Label(scan_frame, text="", font=("Arial", 12), bg="white", fg="blue")
         self.lbl_scan_message.pack(side="left", padx=5)
 
+    # --------------------------------------------------------------------------
+    # Panel: Información del Proceso (Columna 2)
+    # --------------------------------------------------------------------------
+    def create_process_info_panel(self, container):
+        """
+        Información del Proceso (Columna Derecha) con padding extra.
+        """
+        tk.Label(container, 
+                text="Proceso Packing", 
+                font=("Arial", 14, "bold"), 
+                fg=PRIMARY_COLOR, 
+                bg="white"
+                ).pack(pady=(10, 5))  # Padding superior e inferior
+
+        self.lbl_nombre = tk.Label(container, text="Nombre: -", font=("Arial", 12), bg="white")
+        self.lbl_nombre.pack(anchor="w", padx=10, pady=5)
+
+        self.lbl_iniciado = tk.Label(container, text="Iniciado: -", font=("Arial", 12), bg="white")
+        self.lbl_iniciado.pack(anchor="w", padx=10, pady=5)
+
+        self.lbl_finalizado = tk.Label(container, text="Finalizado: -", font=("Arial", 12), bg="white")
+        self.lbl_finalizado.pack(anchor="w", padx=10, pady=5)
+
+        self.lbl_creado_por = tk.Label(container, text="Creado por: -", font=("Arial", 12), bg="white")
+        self.lbl_creado_por.pack(anchor="w", padx=10, pady=5)
+
+
+    # --------------------------------------------------------------------------
+    # Parte inferior
+    # --------------------------------------------------------------------------
     def create_products_table_panel(self, container):
         """
-        Tabla de productos (1/3 ancho) en la parte inferior izquierda.
-        Doble clic en producto => ver detalle.
+        Tabla de productos por escanear (columna izquierda en bottom_frame).
         """
         tk.Label(container, text="Productos por Escanear", font=("Arial", 14, "bold"), bg="white").pack(pady=5)
 
@@ -263,7 +286,7 @@ class PackingShowView(tk.Frame):
             container,
             columns=columns,
             show="headings",
-            height=15
+            height=20  # Aumentado para que sea más grande
         )
         self.current_order_tree.heading("Imagen", text="Imagen")
         self.current_order_tree.heading("Nombre", text="Nombre")
@@ -292,7 +315,7 @@ class PackingShowView(tk.Frame):
 
     def create_confirmed_orders_table(self):
         """
-        Parte inferior derecha: Órdenes confirmadas + paginación
+        Tabla de Órdenes Confirmadas (columna derecha en bottom_frame).
         """
         tk.Label(
             self.confirmed_orders_frame,
@@ -303,7 +326,7 @@ class PackingShowView(tk.Frame):
 
         self.lbl_orders_counter = tk.Label(
             self.confirmed_orders_frame,
-            text="Pedidos completados: 0/0",
+            text=" 0/0",
             font=("Arial", 12, "bold"),
             bg="white"
         )
@@ -566,7 +589,7 @@ class PackingShowView(tk.Frame):
 
     def all_products_complete(self):
         """
-        True si scanned >= required para todos.
+        True si scanned >= required para todos los productos.
         """
         for _, info in self.scanned_quantities.items():
             if info["scanned"] < info["required"]:
@@ -645,10 +668,6 @@ class PackingShowView(tk.Frame):
             self.completed_orders_count += 1
             messagebox.showinfo("Pedido Finalizado", "La orden se ha completado correctamente.")
 
-        # label_url = result.get("label_url")
-        # if label_url:
-        #     self.download_and_print_label(label_url)
-
         # Refrescar la vista para traer la siguiente orden
         self.fetch_process_detail()
 
@@ -661,18 +680,15 @@ class PackingShowView(tk.Frame):
             # Si no hay órdenes confirmadas
             self.confirmed_orders_data.append(("Sin órdenes confirmadas", "", "", "", ""))
         else:
-
             for _, order_info in confirmed.items():
+                # Ejemplo: forzamos "order_id" 49186 en este mock
                 order_id = "49186"
                 products = order_info.get("products", [])
                 prod_text = "; ".join([f"{p.get('name','')}({p.get('quantity',0)})" for p in products])
-
                 started_at = order_info.get("started_at", "-----")
                 finished_at = order_info.get("finished_at", "Sin Finalizar")
                 actions = "Ver Detalle"
-
                 self.confirmed_orders_data.append((order_id, prod_text, started_at, finished_at, actions))
-
 
         self.current_page = 1
         self.total_pages = max(1, math.ceil(len(self.confirmed_orders_data) / self.page_size))
@@ -681,7 +697,7 @@ class PackingShowView(tk.Frame):
 
     def refresh_orders_counter_label(self):
         self.lbl_orders_counter.config(
-            text=f"Pedidos completados: {self.completed_orders_count}/{self.total_orders_count}"
+            text=f"{self.completed_orders_count}/{self.total_orders_count}"
         )
 
     def refresh_table_page(self):
@@ -751,18 +767,14 @@ class PackingShowView(tk.Frame):
 
         item = self.confirmed_tree.item(sel_id)
         values = item["values"]
-        order_val = values[0]  # Esto puede ser un int o un string
+        order_val = values[0]  # Puede ser un int o string
 
-        # Convertimos a string para chequear si es numérico o si es "Sin órdenes confirmadas"
         order_str = str(order_val)
         if not order_str.isdigit():
-            # Aquí evitamos mostrar el modal si, por ejemplo, el texto es "Sin órdenes confirmadas".
             return
 
-        # Si pasa el chequeo, convertimos a entero para pasarlo a la función de detalle
         order_id = int(order_str)
         self.show_order_detail(order_id)
-
 
     def show_order_detail(self, order_id):
         """
@@ -782,14 +794,11 @@ class PackingShowView(tk.Frame):
 
         order = data[0]
 
-        # Creamos la ventana toplevel
         top = tk.Toplevel(self)
         top.title(f"Detalle de la Orden #{order_id}")
-        # Ajusta el tamaño (ancho x alto), lo puedes modificar a tu gusto
         top.geometry("700x600")
         top.configure(bg="#f0f0f0")  
 
-        # Encabezado
         header_label = tk.Label(
             top,
             text=f"Detalle de la Orden #{order_id}",
@@ -799,9 +808,6 @@ class PackingShowView(tk.Frame):
         )
         header_label.pack(side="top", fill="x", pady=(10, 5))
 
-        # ----------------------------------------------------------------------------
-        # Sección: Información General
-        # ----------------------------------------------------------------------------
         info_frame = tk.Frame(top, bg="white", bd=1, relief="solid")
         info_frame.pack(fill="both", expand=True, padx=10, pady=(5, 10))
 
@@ -814,7 +820,6 @@ class PackingShowView(tk.Frame):
         )
         section_title.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(5, 10))
 
-        # Función auxiliar para crear fila Label-Valor en grid
         def add_info_row(parent, row_idx, label_text, value_text):
             label_widget = tk.Label(
                 parent, text=label_text,
@@ -822,7 +827,6 @@ class PackingShowView(tk.Frame):
                 bg="white", fg="black"
             )
             label_widget.grid(row=row_idx, column=0, sticky="e", padx=10, pady=3)
-
             value_widget = tk.Label(
                 parent, text=value_text,
                 font=("Arial", 10),
@@ -830,7 +834,6 @@ class PackingShowView(tk.Frame):
             )
             value_widget.grid(row=row_idx, column=1, sticky="w", padx=10, pady=3)
 
-        # Agregamos filas con la info
         row_index = 1
         add_info_row(info_frame, row_index, "Orden ID:", str(order.get("id", ""))); row_index += 1
         add_info_row(info_frame, row_index, "Nombre:", order.get("name", "")); row_index += 1
@@ -846,9 +849,6 @@ class PackingShowView(tk.Frame):
         add_info_row(info_frame, row_index, "Confirmado:", confirmed_at); row_index += 1
         add_info_row(info_frame, row_index, "Fulfilled:", fulfilled_at); row_index += 1
 
-        # ----------------------------------------------------------------------------
-        # Sección: Líneas de Pedido
-        # ----------------------------------------------------------------------------
         lines_frame = tk.Frame(top, bg="white", bd=1, relief="solid")
         lines_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -861,30 +861,24 @@ class PackingShowView(tk.Frame):
         )
         lines_title.pack(anchor="w", padx=10, pady=(5, 10))
 
-        # Creamos un frame contenedor para poder agregar scrollbar si hay muchas líneas
         lines_container = tk.Frame(lines_frame, bg="white")
         lines_container.pack(fill="both", expand=True)
 
-        # Scrollbar vertical
         scrollbar = ttk.Scrollbar(lines_container, orient="vertical")
         scrollbar.pack(side="right", fill="y")
 
-        # Canvas para poder hacer scroll en los elementos
         canvas = tk.Canvas(lines_container, bg="white", yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=canvas.yview)
 
-        # Frame interno que contendrá todas las líneas de pedido
         lines_inner_frame = tk.Frame(canvas, bg="white")
         canvas.create_window((0,0), window=lines_inner_frame, anchor="nw")
 
-        # Ajuste para que el frame se redibuje y calcule el scroll cuando cambiamos tamaño
         def on_frame_configure(event):
             canvas.config(scrollregion=canvas.bbox("all"))
 
         lines_inner_frame.bind("<Configure>", on_frame_configure)
 
-        # Cargamos las líneas
         lines = order.get("lines", [])
         if not lines:
             no_lines_label = tk.Label(
@@ -908,9 +902,6 @@ class PackingShowView(tk.Frame):
                 )
                 line_label.pack(anchor="w", padx=20, pady=2)
 
-        # ----------------------------------------------------------------------------
-        # Botón de Cerrar
-        # ----------------------------------------------------------------------------
         close_btn = tk.Button(
             top,
             text="Cerrar",
@@ -918,8 +909,6 @@ class PackingShowView(tk.Frame):
             **BUTTON_STYLE
         )
         close_btn.pack(side="bottom", pady=10)
-
-
 
     # --------------------------------------------------------------------------
     # Impresión (PDF)
@@ -952,9 +941,9 @@ class PackingShowView(tk.Frame):
             messagebox.showerror("Error de Impresión", f"Ocurrió un error: {str(e)}")
 
 
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Ejemplo local (Mock)
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 if __name__ == "__main__":
     class MockLoginController:
         class ApiClient:
