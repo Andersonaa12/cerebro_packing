@@ -8,19 +8,17 @@ from tkinter import messagebox, ttk
 from datetime import datetime
 import json
 import winsound  # Para reproducir sonidos de alerta en Windows
+import webbrowser  # Para abrir URLs en el navegador
 
 import win32api
 import win32print
 
 from PIL import Image, ImageTk
 from io import BytesIO
-
-# Ajusta las rutas a tu proyecto real
 from config.settings import API_BASE_URL
 from services.api_routes import API_ROUTES
-from components.barcode_widget import create_barcode_widget
 from assets.css.styles import PRIMARY_COLOR, BACKGROUND_COLOR_VIEWS, LABEL_STYLE, BUTTON_STYLE
-
+from components.print_component import print_from_url
 
 JSON_CONFIG_FILE = "printer_config.json"
 
@@ -47,22 +45,21 @@ def load_printer_config():
 
 class PackingShowView(tk.Frame):
     """
-    Vista de Packing con una organización en la parte superior (3 columnas) y la parte inferior (2 columnas).
+    Vista de Packing con organización en la parte superior (3 columnas) y la parte inferior (2 filas).
     
     Parte superior (top_frame):
       - Columna 0 (Izquierda): Información del Pedido Actual
-      - Columna 1 (Centro):  Escanear (SKU - Cod.barras)
-      - Columna 2 (Derecha): Información del Proceso
+      - Columna 1 (Centro):    Escanear (SKU - Cod.barras)
+      - Columna 2 (Derecha):   Información del Proceso
 
     Parte inferior (bottom_frame):
-      - Columna 0 (Izquierda, más ancha): Tabla de Productos por Escanear
-      - Columna 1 (Derecha): Órdenes Confirmadas
-    
+      - Fila 0: Tabla de Productos por Escanear (con imagen)
+      - Fila 1: Tabla de Órdenes Confirmadas
+
     Lógica:
       - Escaneo de productos (cuando se completa la cantidad de todos los productos,
         se confirma automáticamente la orden y pasa a la siguiente).
-      - Doble clic en producto => muestra detalle (placeholder).
-      - Doble clic en orden confirmada => muestra detalle.
+      - Doble clic en un producto abre una ventana de detalle con la imagen y datos del mismo.
       - Se emite beep solo en error (producto no pertenece, etc.).
     """
     def __init__(self, master=None, process_id=None, login_controller=None, on_back=None):
@@ -77,21 +74,22 @@ class PackingShowView(tk.Frame):
         print(f"[DEBUG] Impresora inicial (PackingShowView): {self.selected_printer}")
 
         # Variables de estado
-        self.pending_process_order = None   # Orden actual
+        self.pending_process_order = None   # Orden actual (packing_process_order)
         self.current_order_products = []    # Productos del pedido actual
-        self.scanned_quantities = {}        # { product_id: {"scanned", "required", "row_id", "sku", "bar_code"} }
+        self.scanned_quantities = {}        # { product_id: {...} }
         self.confirmed_orders_data = []     # Lista de órdenes confirmadas
         self.total_orders_count = 0         # Cantidad total de pedidos en este packing
         self.completed_orders_count = 0     # Cuántas ya finalizadas
 
-        # Tabla de órdenes confirmadas config
+        # Diccionarios para imágenes y mapeo entre fila y producto
+        self.product_images = {}            # Almacena PhotoImage de cada producto
+        self.tree_row_to_product = {}       # Mapea row_id de la tabla a product_id
+
+        # Config paginación Órdenes Confirmadas
         self.page_size = 10
         self.current_page = 1
         self.total_pages = 1
         self.sort_directions = {}
-
-        # Para que la imagen no sea recolectada (si en algún momento se usa)
-        self.product_image_tk = None
 
         # Construye la interfaz
         self.create_widgets()
@@ -105,10 +103,10 @@ class PackingShowView(tk.Frame):
         """
         Layout:
           - Encabezado (barra naranja superior)
-          - Sección superior (top_frame) con 3 columnas:
-              [Información del Pedido Actual] - [Escanear (SKU)] - [Información del Proceso]
-          - Sección inferior (bottom_frame) con 2 columnas:
-              [Productos por Escanear (grande)] - [Órdenes Confirmadas]
+          - Sección superior (top_frame) con 3 columnas
+          - Sección inferior (bottom_frame + canvas):
+              * Productos por Escanear (fila 0)
+              * Órdenes Confirmadas   (fila 1)
         """
         self.create_header()
 
@@ -136,22 +134,57 @@ class PackingShowView(tk.Frame):
         process_container.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
         self.create_process_info_panel(process_container)
 
-        # Sección inferior (con borde "doble")
+        # --------------------------
+        # Sección inferior (scroll)
+        # --------------------------
         bottom_frame = tk.Frame(self, bg="white", bd=2, relief="ridge")
         bottom_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # Configuramos 2 columnas para bottom_frame
-        bottom_frame.columnconfigure(0, weight=2)   # Productos por Escanear más grande
-        bottom_frame.columnconfigure(1, weight=1)   # Órdenes Confirmadas
+        canvas = tk.Canvas(bottom_frame, bg="white")
+        canvas.pack(side="left", fill="both", expand=True)
 
-        # === Columna 0: Tabla de Productos por Escanear ===
-        self.products_frame = tk.Frame(bottom_frame, bg="white", bd=2, relief="ridge")
+        scroll_y = ttk.Scrollbar(bottom_frame, orient="vertical", command=canvas.yview)
+        scroll_y.pack(side="right", fill="y")
+
+        canvas.configure(yscrollcommand=scroll_y.set)
+
+        # Frame interno que contendrá las dos tablas (una encima de la otra)
+        bottom_content_frame = tk.Frame(canvas, bg="white")
+        # Creamos un "window" dentro del canvas para colocar bottom_content_frame
+        canvas_window = canvas.create_window((0, 0), window=bottom_content_frame, anchor="nw")
+
+        # Ajustar la región de scroll cuando cambie el tamaño interno
+        def on_bottom_frame_configure(event):
+            # Ajusta el área de scroll
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        bottom_content_frame.bind("<Configure>", on_bottom_frame_configure)
+
+        # También forzamos que el ancho del frame interno se adapte al ancho del canvas
+        def on_canvas_configure(event):
+            # Ancho actual del canvas
+            canvas_width = event.width
+            # Ajustamos el width del window dentro del canvas
+            canvas.itemconfig(canvas_window, width=canvas_width)
+
+        canvas.bind("<Configure>", on_canvas_configure)
+
+        # Configurar el grid en bottom_content_frame
+        bottom_content_frame.columnconfigure(0, weight=1)
+        # También hacemos que cada fila se expanda en X
+        bottom_content_frame.rowconfigure(0, weight=1)
+        bottom_content_frame.rowconfigure(1, weight=1)
+
+        # Fila 0: Productos por escanear
+        self.products_frame = tk.Frame(bottom_content_frame, bg="white", bd=2, relief="ridge")
         self.products_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+
         self.create_products_table_panel(self.products_frame)
 
-        # === Columna 1: Órdenes Confirmadas ===
-        self.confirmed_orders_frame = tk.Frame(bottom_frame, bg="white", bd=2, relief="ridge")
-        self.confirmed_orders_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        # Fila 1: Órdenes confirmadas
+        self.confirmed_orders_frame = tk.Frame(bottom_content_frame, bg="white", bd=2, relief="ridge")
+        self.confirmed_orders_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+
         self.create_confirmed_orders_table()
 
     def create_header(self):
@@ -194,7 +227,6 @@ class PackingShowView(tk.Frame):
         content_frame.pack(fill="x", padx=5, pady=5)
 
         row_idx = 0
-        # Creamos las labels y las ubicamos en 2 columnas
         self.lbl_order_id = tk.Label(content_frame, text="Pedido ID: -", font=("Arial", 12), bg="white")
         self.lbl_order_id.grid(row=row_idx, column=0, sticky="w", padx=5, pady=2)
         self.lbl_order_name = tk.Label(content_frame, text="Cliente: -", font=("Arial", 12), bg="white")
@@ -233,11 +265,9 @@ class PackingShowView(tk.Frame):
         scan_frame = tk.Frame(container, bg="white")
         scan_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Configuramos un estilo personalizado para la entrada con ttk
         style = ttk.Style()
         style.configure("Custom.TEntry", padding=5, relief="flat", font=("Arial", 12), foreground="black")
         
-        # Usamos ttk.Entry en lugar de tk.Entry
         self.entry_barcode = ttk.Entry(scan_frame, style="Custom.TEntry")
         self.entry_barcode.pack(side="left", padx=5, fill="x", expand=True)
         self.entry_barcode.bind("<Return>", self.on_barcode_enter)
@@ -249,15 +279,13 @@ class PackingShowView(tk.Frame):
     # Panel: Información del Proceso (Columna 2)
     # --------------------------------------------------------------------------
     def create_process_info_panel(self, container):
-        """
-        Información del Proceso (Columna Derecha) con padding extra.
-        """
-        tk.Label(container, 
-                text="Proceso Packing", 
-                font=("Arial", 14, "bold"), 
-                fg=PRIMARY_COLOR, 
-                bg="white"
-                ).pack(pady=(10, 5))  # Padding superior e inferior
+        tk.Label(
+            container,
+            text="Proceso Packing",
+            font=("Arial", 14, "bold"),
+            fg=PRIMARY_COLOR,
+            bg="white"
+        ).pack(pady=(10, 5))
 
         self.lbl_nombre = tk.Label(container, text="Nombre: -", font=("Arial", 12), bg="white")
         self.lbl_nombre.pack(anchor="w", padx=10, pady=5)
@@ -271,52 +299,54 @@ class PackingShowView(tk.Frame):
         self.lbl_creado_por = tk.Label(container, text="Creado por: -", font=("Arial", 12), bg="white")
         self.lbl_creado_por.pack(anchor="w", padx=10, pady=5)
 
-
     # --------------------------------------------------------------------------
-    # Parte inferior
+    # Parte inferior: Tabla de Productos por Escanear (con imagen)
     # --------------------------------------------------------------------------
     def create_products_table_panel(self, container):
-        """
-        Tabla de productos por escanear (columna izquierda en bottom_frame).
-        """
-        tk.Label(container, text="Productos por Escanear", font=("Arial", 14, "bold"), bg="white").pack(pady=5)
+        tk.Label(container, text="Productos por Escanear", font=("Arial", 16, "bold"), bg="white").pack(pady=5)
 
-        columns = ("Imagen", "Nombre", "SKU", "Cantidad")
+        # Aplicar estilos
+        style = ttk.Style()
+        style.configure("Treeview", font=("Arial", 14), rowheight=40)  # Aumentar la altura de las filas
+        style.configure("Treeview.Heading", font=("Arial", 14, "bold"))  # Fuente más grande en encabezados
+
+        # Definir columnas
+        columns = ("Nombre", "SKU", "Cantidad")
         self.current_order_tree = ttk.Treeview(
             container,
             columns=columns,
-            show="headings",
-            height=20  # Aumentado para que sea más grande
+            show="tree headings",
+            height=17
         )
-        self.current_order_tree.heading("Imagen", text="Imagen")
-        self.current_order_tree.heading("Nombre", text="Nombre")
+
+        # Configurar encabezados
+        self.current_order_tree.heading("#0", text="Imagen")
+        self.current_order_tree.column("#0", width=100, anchor="center")  # Columna de imagen más ancha
+        self.current_order_tree.heading("Nombre", text="Nombre del Producto")
+        self.current_order_tree.column("Nombre", width=400, anchor="center")
         self.current_order_tree.heading("SKU", text="SKU")
-        self.current_order_tree.heading("Cantidad", text="Escaneados/Total")
+        self.current_order_tree.column("SKU", width=150, anchor="center")
+        self.current_order_tree.heading("Cantidad", text="Escaneados")
+        self.current_order_tree.column("Cantidad", width=150, anchor="center")
 
-        # Ajustar columnas
-        self.current_order_tree.column("Imagen", width=80, anchor="center")
-        self.current_order_tree.column("Nombre", width=150, anchor="center")
-        self.current_order_tree.column("SKU", width=120, anchor="center")
-        self.current_order_tree.column("Cantidad", width=100, anchor="center")
-
-        # Colores
+        # Configurar colores de fila según estado
         self.current_order_tree.tag_configure("pending", background="white")
         self.current_order_tree.tag_configure("partial", background="orange")
         self.current_order_tree.tag_configure("complete", background="lightgreen")
 
+        # Agregar barra de desplazamiento
         scroll = ttk.Scrollbar(container, orient="vertical", command=self.current_order_tree.yview)
         self.current_order_tree.configure(yscrollcommand=scroll.set)
 
         self.current_order_tree.pack(side="left", fill="both", expand=True)
         scroll.pack(side="left", fill="y")
 
-        # Doble clic en un producto
         self.current_order_tree.bind("<Double-1>", self.on_product_double_click)
 
+        # --------------------------------------------------------------------------
+    # Tabla de Órdenes Confirmadas
+    # --------------------------------------------------------------------------
     def create_confirmed_orders_table(self):
-        """
-        Tabla de Órdenes Confirmadas (columna derecha en bottom_frame).
-        """
         tk.Label(
             self.confirmed_orders_frame,
             text="Órdenes Confirmadas",
@@ -332,7 +362,8 @@ class PackingShowView(tk.Frame):
         )
         self.lbl_orders_counter.pack()
 
-        columns = ("Orden #", "Productos", "Inicio", "Fin", "Acciones")
+        # Definir columnas
+        columns = ("Orden #", "Productos", "Duración (seg)", "Acciones")
         self.confirmed_tree = ttk.Treeview(
             self.confirmed_orders_frame,
             columns=columns,
@@ -344,14 +375,16 @@ class PackingShowView(tk.Frame):
                 text=col,
                 command=lambda _col=col: self.sort_column(_col, False)
             )
-            self.confirmed_tree.column(col, anchor="center", width=140)
-            self.sort_directions[col] = False
+            # Ajustar el ancho de la columna "Acciones" para el botón
+            width = 200 if col == "Acciones" else 140
+            self.confirmed_tree.column(col, anchor="center", width=width)
 
         scrollbar = ttk.Scrollbar(self.confirmed_orders_frame, orient="vertical", command=self.confirmed_tree.yview)
         self.confirmed_tree.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         self.confirmed_tree.pack(expand=True, fill="both")
 
+        # Doble clic sigue mostrando el detalle
         self.confirmed_tree.bind("<Double-1>", self.on_confirmed_order_double_click)
 
         # Paginación
@@ -380,10 +413,6 @@ class PackingShowView(tk.Frame):
     # Fetch data & Update UI
     # --------------------------------------------------------------------------
     def fetch_process_detail(self):
-        """
-        Llama al endpoint PACKING_VIEW para obtener info del proceso,
-        setea la orden pendiente y refresca la interfaz.
-        """
         endpoint = API_ROUTES["PACKING_VIEW"].format(id=self.process_id)
         response = self.login_controller.api_client._make_get_request(endpoint)
         if not response or not response.get("success"):
@@ -393,7 +422,6 @@ class PackingShowView(tk.Frame):
         data = response.get("data", {})
         process = data.get("process", {})
 
-        # Info general del proceso
         self.lbl_nombre.config(text=f"Nombre: {process.get('name', 'N/A')}")
         self.lbl_iniciado.config(text=f"Iniciado: {process.get('started_at', 'N/A')}")
         finished_at = process.get("finished_at")
@@ -405,22 +433,17 @@ class PackingShowView(tk.Frame):
             creador = creador.get("name", "N/A")
         self.lbl_creado_por.config(text=f"Creado por: {creador}")
 
-        # Órdenes confirmadas
         confirmed_orders = data.get("confirmedOrders", {})
         self.update_confirmed_orders_table(confirmed_orders)
 
-        # Cantidad total de pedidos
         packing_orders = process.get("packing_process_orders", [])
         self.total_orders_count = len(packing_orders)
 
-        # Cuántos finalizados
         finished_list = [po for po in packing_orders if po.get("finished_at")]
         self.completed_orders_count = len(finished_list)
 
-        # Si ya está todo finalizado
         all_finished = (len(packing_orders) > 0 and all(o.get("finished_at") for o in packing_orders))
         if finished_at or all_finished:
-            # Bloqueamos y limpiamos
             self.pending_process_order = None
             self.clear_current_order_table()
             self.lbl_order_id.config(text="Pedido ID: -- (Finalizado)")
@@ -429,21 +452,17 @@ class PackingShowView(tk.Frame):
             self.refresh_orders_counter_label()
             return
 
-        # Buscamos la orden pendiente
         self.pending_process_order = data.get("pendingProcessOrder")
         if not self.pending_process_order:
-            # Fallback: primer pedido no finalizado
             not_finished = [po for po in packing_orders if not po.get("finished_at")]
             if not_finished:
                 self.pending_process_order = not_finished[0]
 
         if not self.pending_process_order:
-            # No hay pedido pendiente
             self.clear_current_order_table()
             self.refresh_orders_counter_label()
             return
 
-        # Info del pedido actual
         order_data = self.pending_process_order.get("order", {})
         self.lbl_order_id.config(text=f"Pedido ID: {order_data.get('id', '')}")
         self.lbl_order_name.config(text=f"Cliente: {order_data.get('name', '')}")
@@ -461,33 +480,26 @@ class PackingShowView(tk.Frame):
         shipping_method = order_data.get("shipping_method_name", "N/A")
         self.lbl_shipping_method.config(text=f"Método de envío: {shipping_method}", fg="red")
 
-        # Reiniciamos escaneos
         self.scanned_quantities = {}
-
-        # Cargamos productos
         self.current_order_products = self.pending_process_order.get("packing_process_order_product", [])
         self.populate_current_order_products_table()
 
-        # Habilitamos entry de escaneo
         self.entry_barcode.config(state="normal")
         self.entry_barcode.delete(0, tk.END)
         self.entry_barcode.focus()
 
-        # Actualizamos contadores
         self.refresh_orders_counter_label()
 
     # --------------------------------------------------------------------------
-    # Tabla de productos
+    # Tabla de productos: limpieza y llenado
     # --------------------------------------------------------------------------
     def clear_current_order_table(self):
         for row in self.current_order_tree.get_children():
             self.current_order_tree.delete(row)
 
     def populate_current_order_products_table(self):
-        """
-        Llena la tabla con la lista de productos.
-        """
         self.clear_current_order_table()
+        self.tree_row_to_product = {}
         for line in self.current_order_products:
             product_data = line.get("product", {})
             p_id = product_data.get("id")
@@ -495,11 +507,27 @@ class PackingShowView(tk.Frame):
             p_sku = product_data.get("sku", "")
             p_bar = product_data.get("bar_code", "")
             p_qty = line.get("quantity", 0)
-
+            image_url = product_data.get("image_url")
+            photo = None
+            if image_url:
+                try:
+                    resp = requests.get(image_url)
+                    if resp.status_code == 200:
+                        image_data = BytesIO(resp.content)
+                        pil_image = Image.open(image_data)
+                        pil_image.thumbnail((50, 50))
+                        photo = ImageTk.PhotoImage(pil_image)
+                        self.product_images[p_id] = photo
+                    else:
+                        print(f"Error al cargar imagen: {image_url}")
+                except Exception as e:
+                    print(f"Error al cargar imagen {image_url}: {e}")
             row_id = self.current_order_tree.insert(
                 "",
                 "end",
-                values=("No Img", p_name, p_sku, f"0/{p_qty}"),
+                text="",
+                image=photo,
+                values=(p_name, p_sku, f"0/{p_qty}"),
                 tags=("pending",)
             )
             self.scanned_quantities[p_id] = {
@@ -507,11 +535,14 @@ class PackingShowView(tk.Frame):
                 "required": p_qty,
                 "row_id": row_id,
                 "sku": p_sku,
-                "bar_code": p_bar
+                "bar_code": p_bar,
+                "image_url": image_url,
+                "name": p_name
             }
+            self.tree_row_to_product[row_id] = p_id
 
     # --------------------------------------------------------------------------
-    # Escaneo
+    # Escaneo de productos
     # --------------------------------------------------------------------------
     def on_barcode_enter(self, event):
         scanned_code = self.entry_barcode.get().strip()
@@ -520,10 +551,8 @@ class PackingShowView(tk.Frame):
         if not self.pending_process_order:
             return
 
-        # Buscar producto
         matched_id = self.find_product_id_by_scan(scanned_code)
         if matched_id is None:
-            # Error
             self.play_error_sound()
             self.lbl_scan_message.config(text="Producto NO pertenece al pedido.", fg="red")
             return
@@ -534,31 +563,22 @@ class PackingShowView(tk.Frame):
             self.lbl_scan_message.config(text="Error interno al escanear.", fg="red")
             return
 
-        # Verificar sobre-escaneo
         if info["scanned"] >= info["required"]:
             self.play_error_sound()
             self.lbl_scan_message.config(text="Este producto ya está completo.", fg="red")
             return
 
-        # Correcto => aumentar
         info["scanned"] += 1
         self.update_product_row(matched_id)
-
-        # Sin beep => escaneo correcto
         self.lbl_scan_message.config(text="")
 
-        # Si se han completado todos => confirmamos y pasamos al siguiente
         if self.all_products_complete():
             self.confirm_current_order()
 
     def find_product_id_by_scan(self, scanned_code):
-        """
-        Retorna product_id si coincide con bar_code o sku, None si no existe.
-        """
         for p_id, info in self.scanned_quantities.items():
             bar_code = info.get("bar_code", "")
             sku = info.get("sku", "")
-
             if bar_code and scanned_code == bar_code:
                 return p_id
             if scanned_code == sku:
@@ -576,7 +596,7 @@ class PackingShowView(tk.Frame):
 
         old_vals = self.current_order_tree.item(row_id, "values")
         new_col = f"{scanned}/{required}"
-        new_values = (old_vals[0], old_vals[1], old_vals[2], new_col)
+        new_values = (old_vals[0], old_vals[1], new_col)
 
         if scanned == 0:
             tag = "pending"
@@ -588,9 +608,6 @@ class PackingShowView(tk.Frame):
         self.current_order_tree.item(row_id, values=new_values, tags=(tag,))
 
     def all_products_complete(self):
-        """
-        True si scanned >= required para todos los productos.
-        """
         for _, info in self.scanned_quantities.items():
             if info["scanned"] < info["required"]:
                 return False
@@ -600,55 +617,109 @@ class PackingShowView(tk.Frame):
         winsound.Beep(1000, 300)
 
     # --------------------------------------------------------------------------
-    # Doble clic en un producto => placeholder de detalle
+    # Doble clic en un producto: muestra el detalle con imagen
     # --------------------------------------------------------------------------
     def on_product_double_click(self, event):
-        """
-        Cuando se hace doble clic en un producto de la tabla,
-        mostramos un placeholder con info del producto.
-        """
         try:
-            item_id = self.current_order_tree.selection()[0]
+            row_id = self.current_order_tree.selection()[0]
         except IndexError:
             return
+        product_id = self.tree_row_to_product.get(row_id)
+        if product_id is None:
+            return
+        self.show_product_detail(product_id)
 
-        values = self.current_order_tree.item(item_id, "values")
-        # (Imagen, Nombre, SKU, 0/2)
-        product_name = values[1]
-        product_sku = values[2]
-        quantity_text = values[3]
-
-        detail_text = f"Producto: {product_name}\nSKU: {product_sku}\nCantidad: {quantity_text}\n\n(Detalle extra...)"
+    def show_product_detail(self, product_id):
+        info = self.scanned_quantities.get(product_id)
+        if not info:
+            messagebox.showerror("Error", "Información del producto no disponible.")
+            return
 
         top = tk.Toplevel(self)
-        top.title(f"Detalle del Producto: {product_name}")
+        top.title(f"Detalle del Producto: {info.get('name', '')}")
+        top.geometry("700x400")
+        top.configure(bg="#f0f0f0")
 
-        text = tk.Text(top, wrap="word", font=("Arial", 12))
-        text.insert("1.0", detail_text)
-        text.config(state="disabled")
-        text.pack(expand=True, fill="both", padx=10, pady=10)
+        header_label = tk.Label(
+            top,
+            text=f"{info.get('name', '')}",
+            font=("Arial", 14, "bold"),
+            bg="#f0f0f0", fg="black"
+        )
+        header_label.pack(side="top", fill="x", pady=(10, 5))
 
-        btn_close = tk.Button(top, text="Cerrar", command=top.destroy, **BUTTON_STYLE)
-        btn_close.pack(pady=5)
+        content_frame = tk.Frame(top, bg="white", bd=1, relief="solid")
+        content_frame.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+
+        # Sección para la imagen del producto
+        image_frame = tk.Frame(content_frame, bg="white")
+        image_frame.pack(pady=10)
+
+        photo = self.product_images.get(product_id)
+
+        if photo:
+            try:
+                if isinstance(photo, ImageTk.PhotoImage):
+                    img_label = tk.Label(image_frame, image=photo, bg="white")
+                    img_label.image = photo  # Guardar referencia
+                    img_label.pack()
+                else:
+                    tk.Label(image_frame, text="No hay imagen disponible.", font=("Arial", 12), bg="white").pack()
+            except Exception as e:
+                print("Error cargando la imagen:", e)
+                tk.Label(image_frame, text="No hay imagen disponible.", font=("Arial", 12), bg="white").pack()
+        else:
+            tk.Label(image_frame, text="No hay imagen disponible.", font=("Arial", 12), bg="white").pack()
+
+        # Sección de detalles del producto
+        details_frame = tk.Frame(content_frame, bg="white")
+        details_frame.pack(pady=10, fill="x")
+
+        def add_info_row(parent, row_idx, label_text, value_text):
+            lbl = tk.Label(parent, text=label_text, font=("Arial", 12, "bold"), 
+                        bg="white", fg="black", width=15, anchor="e")
+            lbl.grid(row=row_idx, column=0, sticky="e", padx=5, pady=5)
+            val = tk.Label(parent, text=value_text, font=("Arial", 12), 
+                        bg="white", fg="#555", anchor="w")
+            val.grid(row=row_idx, column=1, sticky="w", padx=5, pady=5)
+
+        row_idx = 0
+        add_info_row(details_frame, row_idx, "SKU:", info.get("sku", "N/A")); row_idx += 1
+        add_info_row(details_frame, row_idx, "Código de Barras:", info.get("bar_code", "N/A")); row_idx += 1
+        add_info_row(details_frame, row_idx, "Escaneado:", str(info.get("scanned", 0))); row_idx += 1
+        add_info_row(details_frame, row_idx, "Requerido:", str(info.get("required", 0))); row_idx += 1
+
+        close_btn = tk.Button(top, text="Cerrar", command=top.destroy)
+        close_btn.pack(pady=10)
 
     # --------------------------------------------------------------------------
-    # Confirmar automáticamente la orden
+    # Confirmar automáticamente la orden cuando se completan todos los productos
     # --------------------------------------------------------------------------
     def confirm_current_order(self):
-        """
-        Llama al endpoint PACKING_CONFIRM en cuanto se completan todos los productos
-        y pasa a la siguiente orden.
-        """
         if not self.pending_process_order:
             return
 
+        # Get the tracking code from the pending order
+        order_data = self.pending_process_order.get("order", {})
+        expected_tracking_code = order_data.get("tracking_code", "")
+        
+        # Print para verificar los datos de la orden
+        print(f"[DEBUG] Datos de la orden actual - ID: {self.pending_process_order.get('id')}, "
+            f"Tracking Code esperado: {expected_tracking_code}, "
+            f"Datos completos: {order_data}")
+        
+        # Show modal window to scan tracking code and verify it
+        if not self.verify_tracking_code(expected_tracking_code):
+            # If verification fails, we don't proceed (window stays open in verify_tracking_code)
+            return
+        
+        # If we reach here, tracking code was verified successfully
         order_id = self.pending_process_order.get("id")
         endpoint = API_ROUTES["PACKING_CONFIRM"].format(
             packingProcessOrder_id=order_id,
             packingProcess_id=self.process_id
         )
 
-        # Armar payload completedProducts
         completed_products = []
         for p_id, info in self.scanned_quantities.items():
             completed_products.append({
@@ -663,38 +734,133 @@ class PackingShowView(tk.Frame):
             messagebox.showerror("Error", "No se pudo confirmar la orden en la API.")
             return
 
-        data_r = result.get("data", {})
-        if data_r.get("finished_at"):
-            self.completed_orders_count += 1
-            messagebox.showinfo("Pedido Finalizado", "La orden se ha completado correctamente.")
-
-        # Refrescar la vista para traer la siguiente orden
+        # Get the label_url directly from result
+        label_url = result.get("label_url")
+        
+        success_message = "La orden se ha completado correctamente."
+        
+        # If label_url exists, attempt to print it
+        if label_url:
+            try:
+                from components.print_component import print_from_url
+                if label_url == 0:
+                    success_message += "\nPacking Finalizado!!!."
+                else:
+                    print_from_url(label_url)
+                    success_message += "\nEtiqueta enviada a imprimir."
+            except Exception as e:
+                messagebox.showwarning(
+                    "Advertencia", 
+                    f"Orden completada pero error al imprimir etiqueta: {str(e)}"
+                )
+        
+        self.completed_orders_count += 1
+        # messagebox.showinfo("Pedido Finalizado", success_message)
+        
         self.fetch_process_detail()
-
     # --------------------------------------------------------------------------
-    # Órdenes Confirmadas
+    # Valida el TrakingCode
+    # --------------------------------------------------------------------------
+    def verify_tracking_code(self, expected_tracking_code):
+        tracking_window = tk.Toplevel(self)
+        tracking_window.title("Verificar Tracking Code")
+        tracking_window.geometry("400x200")
+        tracking_window.configure(bg="#f0f0f0")
+        tracking_window.grab_set()  # Makes the window modal
+        tracking_window.transient(self.master)  # Ties it to the parent window
+        
+        # Center the window relative to the parent
+        tracking_window.update_idletasks()
+        x = self.master.winfo_x() + (self.master.winfo_width() // 2) - (tracking_window.winfo_width() // 2)
+        y = self.master.winfo_y() + (self.master.winfo_height() // 2) - (tracking_window.winfo_height() // 2)
+        tracking_window.geometry(f"+{x}+{y}")
+        
+        # Label
+        tk.Label(
+            tracking_window,
+            text="Escanea el Tracking Code:",
+            font=("Arial", 12, "bold"),
+            bg="#f0f0f0",
+            fg="black"
+        ).pack(pady=10)
+        
+        # Entry for scanning
+        tracking_entry = ttk.Entry(tracking_window, font=("Arial", 12))
+        tracking_entry.pack(pady=5, padx=10, fill="x")
+        tracking_entry.focus_set()
+        
+        # Message label for feedback
+        message_label = tk.Label(
+            tracking_window,
+            text=f"Esperado: '{expected_tracking_code}'" if expected_tracking_code else "Esperado: (vacío)",
+            font=("Arial", 10),
+            bg="#f0f0f0",
+            fg="blue"
+        )
+        message_label.pack(pady=5)
+        
+        # Variable to store result
+        verification_result = {"success": False}
+        
+        def check_tracking_code(event=None):
+            scanned_code = tracking_entry.get().strip()
+            # Comparar estrictamente: deben ser iguales (incluyendo si ambos son vacíos)
+            if scanned_code == expected_tracking_code:
+                verification_result["success"] = True
+                tracking_window.destroy()
+            else:
+                self.play_error_sound()
+                message_label.config(text="Error: El tracking code no coincide", fg="red")
+                tracking_entry.delete(0, tk.END)  # Limpiar entrada para nuevo intento
+        
+        # Bind Enter key to check
+        tracking_entry.bind("<Return>", check_tracking_code)
+        
+        # Verify button
+        verify_btn = tk.Button(
+            tracking_window,
+            text="Verificar",
+            command=check_tracking_code,
+            **BUTTON_STYLE
+        )
+        verify_btn.pack(pady=10)
+        
+        # Wait for the window to close (only closes when codes match)
+        self.master.wait_window(tracking_window)
+        
+        return verification_result["success"]
+    # --------------------------------------------------------------------------
+    # Órdenes Confirmadas: actualización y paginación
     # --------------------------------------------------------------------------
     def update_confirmed_orders_table(self, confirmed):
         self.confirmed_orders_data = []
         if not confirmed:
-            # Si no hay órdenes confirmadas
-            self.confirmed_orders_data.append(("Sin órdenes confirmadas", "", "", "", ""))
+            self.confirmed_orders_data.append(("Sin órdenes confirmadas", "", "", ""))
         else:
             for _, order_info in confirmed.items():
-                # Ejemplo: forzamos "order_id" 49186 en este mock
-                order_id = "49186"
+                order_id = order_info.get("order_id", "")
                 products = order_info.get("products", [])
                 prod_text = "; ".join([f"{p.get('name','')}({p.get('quantity',0)})" for p in products])
-                started_at = order_info.get("started_at", "-----")
-                finished_at = order_info.get("finished_at", "Sin Finalizar")
-                actions = "Ver Detalle"
-                self.confirmed_orders_data.append((order_id, prod_text, started_at, finished_at, actions))
+                started_at = order_info.get("started_at", "")
+                finished_at = order_info.get("finished_at", "")
+                if started_at and finished_at:
+                    try:
+                        dt_start = datetime.strptime(started_at, "%Y-%m-%d %H:%M:%S")
+                        dt_finish = datetime.strptime(finished_at, "%Y-%m-%d %H:%M:%S")
+                        duration_seconds = int((dt_finish - dt_start).total_seconds())
+                    except Exception:
+                        duration_seconds = "N/A"
+                else:
+                    duration_seconds = "N/A"
+                # Texto para la columna Acciones (podemos dejarlo como placeholder)
+                actions = "Imprimir"
+                self.confirmed_orders_data.append((order_id, prod_text, duration_seconds, actions))
 
         self.current_page = 1
         self.total_pages = max(1, math.ceil(len(self.confirmed_orders_data) / self.page_size))
         self.refresh_table_page()
         self.refresh_orders_counter_label()
-
+        
     def refresh_orders_counter_label(self):
         self.lbl_orders_counter.config(
             text=f"{self.completed_orders_count}/{self.total_orders_count}"
@@ -713,6 +879,9 @@ class PackingShowView(tk.Frame):
 
         self.lbl_page_info.config(text=f"Página {self.current_page} de {self.total_pages}")
 
+        # Vincular evento de clic en la columna "Acciones"
+        self.confirmed_tree.bind("<Button-1>", self.on_tree_click)
+
     def previous_page(self):
         if self.current_page > 1:
             self.current_page -= 1
@@ -727,9 +896,8 @@ class PackingShowView(tk.Frame):
         col_map = {
             "Orden #": 0,
             "Productos": 1,
-            "Inicio": 2,
-            "Fin": 3,
-            "Acciones": 4
+            "Duración (seg)": 2,
+            "Acciones": 3
         }
         idx = col_map.get(col)
         if idx is None:
@@ -740,25 +908,20 @@ class PackingShowView(tk.Frame):
                 self.confirmed_orders_data.sort(key=lambda t: int(t[idx]), reverse=reverse)
             except ValueError:
                 self.confirmed_orders_data.sort(key=lambda t: t[idx], reverse=reverse)
-        elif col in ("Inicio", "Fin"):
-            self.confirmed_orders_data.sort(key=lambda t: self.parse_date(t[idx]), reverse=reverse)
+        elif col == "Duración (seg)":
+            self.confirmed_orders_data.sort(
+                key=lambda t: int(t[idx]) if (isinstance(t[idx], int) or
+                                              (isinstance(t[idx], str) and t[idx].isdigit()))
+                else 0,
+                reverse=reverse
+            )
         else:
             self.confirmed_orders_data.sort(key=lambda t: t[idx], reverse=reverse)
 
         self.sort_directions[col] = not reverse
         self.refresh_table_page()
 
-    @staticmethod
-    def parse_date(date_str):
-        try:
-            return datetime.fromisoformat(date_str)
-        except Exception:
-            return datetime.min
-
     def on_confirmed_order_double_click(self, event):
-        """
-        Doble clic en la tabla de Órdenes Confirmadas => mostrar detalle de la orden.
-        """
         try:
             sel_id = self.confirmed_tree.selection()[0]
         except IndexError:
@@ -767,7 +930,7 @@ class PackingShowView(tk.Frame):
 
         item = self.confirmed_tree.item(sel_id)
         values = item["values"]
-        order_val = values[0]  # Puede ser un int o string
+        order_val = values[0]
 
         order_str = str(order_val)
         if not order_str.isdigit():
@@ -775,12 +938,42 @@ class PackingShowView(tk.Frame):
 
         order_id = int(order_str)
         self.show_order_detail(order_id)
+        
+    def on_tree_click(self, event):
+        # Identificar la fila y columna cliqueada
+        item = self.confirmed_tree.identify_row(event.y)
+        column = self.confirmed_tree.identify_column(event.x)
+        if not item or column != "#4":  # "#4" es la columna "Acciones"
+            return
 
+        values = self.confirmed_tree.item(item, "values")
+        order_id = values[0]  # El "Orden #" está en la primera columna
+        if order_id.isdigit():
+            self.print_order(int(order_id))
+
+    def print_order(self, order_id):
+        # Construir la URL del endpoint
+        endpoint = API_ROUTES["PACKING_PRINT_ORDER"].format(order_id=order_id)
+        full_url = f"{API_BASE_URL}{endpoint}"
+
+        # Hacer la solicitud a la API para obtener la URL de la etiqueta (si aplica)
+        response = self.login_controller.api_client._make_get_request(endpoint)
+        if not response or not response.get("success"):
+            messagebox.showerror("Error", "No se pudo obtener la URL de impresión.")
+            return
+
+        label_url = response.get("label_url")
+        if not label_url:
+            messagebox.showerror("Error", "No se encontró la URL de la etiqueta en la respuesta.")
+            return
+
+        # Usar el componente print_from_url para imprimir
+        try:
+            print_from_url(label_url)
+            messagebox.showinfo("Éxito", f"Etiqueta de la orden #{order_id} enviada a la impresora.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al imprimir la orden #{order_id}: {str(e)}")
     def show_order_detail(self, order_id):
-        """
-        Llama a la API para mostrar detalle de la orden en un Toplevel,
-        con un diseño visual más agradable.
-        """
         endpoint = API_ROUTES["GET_ORDER"].format(id=order_id)
         resp = self.login_controller.api_client._make_get_request(endpoint)
         if not resp or not resp.get("success"):
@@ -911,12 +1104,9 @@ class PackingShowView(tk.Frame):
         close_btn.pack(side="bottom", pady=10)
 
     # --------------------------------------------------------------------------
-    # Impresión (PDF)
+    # Impresión (PDF) - si lo necesitas
     # --------------------------------------------------------------------------
     def download_and_print_label(self, label_url):
-        """
-        Ejemplo de descarga de PDF e impresión.
-        """
         try:
             resp = requests.get(label_url)
             if resp.status_code == 200:
@@ -931,9 +1121,6 @@ class PackingShowView(tk.Frame):
             messagebox.showerror("Error", f"Error al imprimir la etiqueta: {str(e)}")
 
     def print_document(self, file_path):
-        """
-        Envía un PDF a la impresora seleccionada.
-        """
         try:
             win32api.ShellExecute(0, "print", file_path, f'/d:"{self.selected_printer}"', ".", 0)
             messagebox.showinfo("Impresión", f"Documento enviado a {self.selected_printer}")
@@ -942,16 +1129,14 @@ class PackingShowView(tk.Frame):
 
 
 # --------------------------------------------------------------------------
-# Ejemplo local (Mock)
+# Ejemplo local (Mock) para pruebas
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
     class MockLoginController:
         class ApiClient:
             def _make_get_request(self, endpoint):
-                # Simula respuesta fallida
                 return {"success": False}
             def _make_post_request(self, endpoint, payload):
-                # Simula respuesta exitosa
                 return {"success": True, "data": {"finished_at": "2025-03-05 16:42:08"}}
 
         api_client = ApiClient()

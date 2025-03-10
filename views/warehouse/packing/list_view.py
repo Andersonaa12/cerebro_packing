@@ -343,7 +343,7 @@ class PackingListView(tk.Frame):
     def fetch_and_populate(self):
         log_message("Solicitando procesos de packing...")
         response = self.login_controller.api_client._make_get_request(API_ROUTES["PACKING_LIST"])
-        log_message("Respuesta de packing: " + str(response))
+        #log_message("Respuesta de packing: " + str(response))
 
         if response is None or not isinstance(response, dict) or not response.get("success"):
             messagebox.showerror("Error", "No se pudo obtener el listado de procesos.")
@@ -352,7 +352,7 @@ class PackingListView(tk.Frame):
         data = response.get("data", {})
         packing_obj = data.get("packing_processes", {})
         processes = packing_obj.get("data", [])
-        log_message("Procesos de packing obtenidos: " + str(processes))
+        #log_message("Procesos de packing obtenidos: " + str(processes))
 
         # Clear current table rows
         for row in self.tree.get_children():
@@ -376,9 +376,9 @@ class PackingListView(tk.Frame):
         for widget in self.waiting_frame.winfo_children():
             widget.destroy()
 
-        log_message("Solicitando procesos de picking en espera...")
+        #log_message("Solicitando procesos de picking en espera...")
         waiting_response = self.login_controller.api_client._make_get_request(API_ROUTES["PACKING_LIST"])
-        log_message("Respuesta de picking en espera: " + str(waiting_response))
+        #log_message("Respuesta de picking en espera: " + str(waiting_response))
 
         waiting_data = []
         if waiting_response and isinstance(waiting_response, dict):
@@ -495,28 +495,50 @@ class PackingListView(tk.Frame):
     def start_packing(self, process):
         """
         Llama a la API para crear/iniciar el proceso de packing (POST).
-        Si es exitoso, navega a la vista de detalle del proceso creado.
+        Si es exitoso, imprime la etiqueta desde la URL proporcionada y navega a la vista de detalle.
         """
+        from components.print_component import print_from_url  # Importamos aquí para evitar circular imports
+
         process_id = process.get("id")
         log_message(f"Iniciando proceso de packing para id: {process_id}")
         endpoint = API_ROUTES["PACKING_CREATE"].format(id=process_id)
         result = self.login_controller.api_client._make_post_request(endpoint, {})
         log_message(f"Resultado de iniciar packing: {result}")
 
-        if result:
-            # Mostramos notificación
-            log_message(f"Proceso de packing iniciado para: {process.get('name')}")
-            messagebox.showinfo("Proceso Iniciado", f"Se inició el proceso de packing para {process.get('name')}.")
+        if result and isinstance(result, dict) and result.get("success"):
+            # Extraemos los datos de la respuesta
+            packing_process = result.get("packingProcess", {})
+            label_url = result.get("url_label", "")
+            process_name = process.get("name", "Sin nombre")
 
-            # Aquí navegamos a la vista de detalle:
-            # Usamos el mismo 'process_id' (el de picking) o el ID nuevo que devuelva la API si fuera diferente.
-            # Asumiendo que es el mismo ID de proceso de packing a visualizar:
-            # (Si la API devuelve un nuevo "packing_process_id" en `result["data"]`, úsalo.)
-            self.on_show_detail(process_id)
+            # Mostramos notificación de éxito
+            log_message(f"Proceso de packing iniciado para: {process_name}")
+            messagebox.showinfo("Proceso Iniciado", f"Se inició el proceso de packing para {process_name}.")
+
+            # Imprimimos la etiqueta si hay una URL válida
+            if label_url:
+                log_message(f"Imprimiendo etiqueta desde URL: {label_url}")
+                try:
+                    print_from_url(label_url)
+                    log_message("Etiqueta enviada a impresión correctamente.")
+                except Exception as e:
+                    log_message(f"Error al imprimir la etiqueta: {str(e)}")
+                    messagebox.showerror("Error de Impresión", f"No se pudo imprimir la etiqueta: {str(e)}")
+            else:
+                log_message("No se proporcionó URL de etiqueta en la respuesta.")
+
+            # Navegamos a la vista de detalle
+            # Usamos el ID del proceso de packing devuelto por la API si está disponible,
+            # de lo contrario, usamos el process_id original
+            new_process_id = packing_process.get("id", process_id)
+            log_message(f"Navegando a detalle con ID: {new_process_id}")
+            self.on_show_detail(new_process_id)
 
         else:
-            log_message(f"Error al iniciar el proceso de packing para id: {process_id}")
-            messagebox.showerror("Error", "No se pudo iniciar el proceso de packing.")
+            # Manejo de error
+            error_msg = result.get("message", "Error desconocido") if result else "Respuesta inválida de la API"
+            log_message(f"Error al iniciar el proceso de packing para id: {process_id} - {error_msg}")
+            messagebox.showerror("Error", f"No se pudo iniciar el proceso de packing: {error_msg}")
 
     def on_row_double_click(self, event):
         """

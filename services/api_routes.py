@@ -7,5 +7,6 @@ API_ROUTES = {
     "PACKING_LIST":    "/packing/process",
     "PACKING_VIEW":    "/packing/process/view/{id}",
     "PACKING_CREATE":  "/packing/process/create/{id}",
-    "PACKING_CONFIRM": "/packing/process/confirm/{packingProcessOrder_id}/{packingProcess_id}"
+    "PACKING_CONFIRM": "/packing/process/confirm/{packingProcessOrder_id}/{packingProcess_id}",
+    "PACKING_PRINT_ORDER":  "/packing/process/print/order/{order_id}",
 }
