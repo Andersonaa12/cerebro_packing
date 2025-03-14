@@ -778,7 +778,7 @@ class PackingShowView(tk.Frame):
         # Label
         tk.Label(
             tracking_window,
-            text="Escanea el Tracking Code:",
+            text="Escanea el Codigo de Seguimiento:",
             font=("Arial", 12, "bold"),
             bg="#f0f0f0",
             fg="black"
