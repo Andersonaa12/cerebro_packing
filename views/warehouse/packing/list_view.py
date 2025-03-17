@@ -557,18 +557,18 @@ class PackingListView(tk.Frame):
         self.on_show_detail(process_id)
 
     def on_show_detail(self, process_id):
-        """
-        Destruye esta vista y crea la vista de detalle (PackingShowView).
-        """
-        self.destroy()
+        # En lugar de self.destroy():
+        self.pack_forget()  # o self.grid_forget() si usas grid
+
         from views.warehouse.packing.show_view import PackingShowView
-        detail_view = PackingShowView(
+        self.detail_view = PackingShowView(
             master=self.master,
             process_id=process_id,
             login_controller=self.login_controller,
-            on_back=self.show_list_view
+            on_back=self.show_list_view  # cuando vuelvas, restauras la lista
         )
-        detail_view.pack(expand=True, fill="both")
+        self.detail_view.pack(expand=True, fill="both")
+
 
     def show_list_view(self):
         """
